@@ -29,3 +29,4 @@ eframe = { version = "0.33.3", default-features = false, features = [
     "x11",
     "wayland",
 ] }
+ytmapi-rs = "0.3.1"
