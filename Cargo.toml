@@ -8,6 +8,13 @@ available-locales = ["en", "ru"]
 default-locale = "en"
 load-path = "locales"
 
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "z"
+panic = "abort"
+
 [dependencies]
 log = "0.4.29"
 env_logger = "0.11.9"
