@@ -2,9 +2,7 @@ mod gui;
 
 use anyhow::Result;
 use clap::Parser;
-
-#[macro_use]
-extern crate rust_i18n;
+use rust_i18n::i18n;
 
 i18n!("locales");
 
