@@ -1,21 +1,54 @@
-use anyhow::{Result, anyhow};
+mod auth;
+
+use anyhow::{Error, Result, anyhow};
 use rust_i18n::t;
 
 use eframe::{App, HardwareAcceleration, NativeOptions};
 use egui::{CentralPanel, Context, Vec2, ViewportBuilder};
+use egui_async::Bind;
 
-pub struct Application {}
+use ytmapi_rs::{YtMusic, auth::OAuthToken};
+
+use auth::AuthState;
+
+struct ApplicationAuth {
+    current_state: Bind<AuthState, Error>,
+    previous_state: Option<AuthState>,
+
+    yt_client: Option<YtMusic<OAuthToken>>,
+}
+
+pub struct Application {
+    auth: ApplicationAuth,
+}
 
 impl Application {
     fn new(_ctx: &Context) -> Self {
-        Self {}
+        Self {
+            auth: ApplicationAuth {
+                current_state: Bind::new(true),
+                previous_state: None,
+
+                yt_client: None,
+            },
+        }
     }
 }
 
 impl App for Application {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.plugin_or_default::<egui_async::EguiAsyncPlugin>();
+
+        // process_auth if no ytclient is provided
+        if self.auth.yt_client.is_none() {
+            self.process_auth(ctx);
+            ctx.request_repaint_after_secs(0.1);
+            return;
+        }
+
         CentralPanel::default().show(ctx, |ui| {
-            ui.centered_and_justified(|ui| ui.label(t!("internal.todo")));
+            ui.heading(t!("auth.success_title"));
+            ui.label(t!("auth.welcome"));
         });
     }
 }

@@ -1,4 +1,5 @@
 mod gui;
+mod misc;
 
 use anyhow::Result;
 use clap::Parser;
@@ -14,6 +15,10 @@ struct Args {}
 
 fn main() -> Result<()> {
     env_logger::init();
+
+    if let Err(e) = dotenv::dotenv() {
+        log::warn!("WARNING: Failed to load .env file: {e}");
+    }
 
     let _args = Args::parse();
 
