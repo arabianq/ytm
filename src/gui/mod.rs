@@ -58,7 +58,7 @@ impl App for Application {
                 ComboBox::from_id_salt("locale_selector")
                     .selected_text(&selected_locale)
                     .show_ui(ui, |ui| {
-                        for locale in available_locales() {
+                        for locale in available_locales!() {
                             ui.selectable_value(&mut selected_locale, locale.to_string(), locale);
                         }
                     });
