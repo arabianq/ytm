@@ -35,4 +35,6 @@ eframe = { version = "0.33.3", default-features = false, features = [
     "x11",
     "wayland",
 ] }
+egui-async = "0.3.4"
+
 ytmapi-rs = "0.3.1"

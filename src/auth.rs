@@ -2,13 +2,10 @@ use anyhow::Result;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 use ytmapi_rs::{YtMusic, auth::OAuthToken};
-
-const TOKEN_FILE: &str = "token.json";
 
 pub enum AuthEvent {
     Checking,
@@ -41,10 +38,9 @@ pub fn start_auth_flow(tx: Sender<AuthEvent>) {
 }
 
 async fn auth_logic(tx: &Sender<AuthEvent>) -> Result<()> {
-    dotenv::dotenv().ok();
     let _ = tx.send(AuthEvent::Checking);
 
-    let token_path = PathBuf::from(TOKEN_FILE);
+    let token_path = dirs::config_dir().unwrap().join("token.json");
 
     // 1. Проверяем сохраненный токен
     if token_path.exists() {
