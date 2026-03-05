@@ -3,3 +3,42 @@ _version = 2
 [internal.todo]
 en = "TODO"
 ru = "ЗАГЛУШКА"
+
+[auth.checking]
+en = "Checking token..."
+
+[auth.required_title]
+en = "Google Auth Required"
+
+[auth.required_instruction]
+en = "Please enter this code at the link below:"
+
+[auth.copy_prompt]
+en = "(Click code to copy)"
+
+[auth.waiting]
+en = "Waiting for authorization..."
+
+[auth.success_title]
+en = "Successfully Logged In!"
+
+[auth.welcome]
+en = "Welcome to YouTube Music"
+
+[auth.error_prefix]
+en = "Error: "
+
+[config.client_id_not_found]
+en = "CLIENT_ID not found in .env"
+
+[config.client_secret_not_found]
+en = "CLIENT_SECRET not found in .env"
+
+[config.client_id_is_secret]
+en = "Configuration Error: Your Client ID starts with 'GOCSPX-'. This is a Client Secret! Please swap the CLIENT_ID and CLIENT_SECRET values in your .env file."
+
+[auth.oauth_request_error]
+en = "OAuth request error: {error}. Check your Client ID."
+
+[auth.auth_error]
+en = "Auth error: {error}"
