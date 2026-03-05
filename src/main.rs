@@ -1,5 +1,5 @@
-mod auth;
 mod gui;
+mod misc;
 
 use anyhow::Result;
 use clap::Parser;

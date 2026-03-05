@@ -25,6 +25,7 @@ rust-i18n = "3.1.5"
 dotenv = "0.15.0"
 dirs = "6.0.0"
 tokio = { version = "1.50.0", features = ["full"] }
+derivative = "2.2.0"
 
 egui = { version = "0.33.3", default-features = false, features = [
     "default_fonts",

@@ -1,101 +1,54 @@
-use anyhow::{Result, anyhow};
+mod auth;
+
+use anyhow::{Error, Result, anyhow};
 use rust_i18n::t;
-use std::sync::mpsc::{Receiver, channel};
 
 use eframe::{App, HardwareAcceleration, NativeOptions};
-use egui::{CentralPanel, Context, RichText, Vec2, ViewportBuilder};
+use egui::{CentralPanel, Context, Vec2, ViewportBuilder};
+use egui_async::Bind;
 
 use ytmapi_rs::{YtMusic, auth::OAuthToken};
 
-use crate::auth::{self, AuthEvent};
+use auth::AuthState;
 
-enum AuthState {
-    Checking,
-    Required { user_code: String, url: String },
-    LoggedIn(YtMusic<OAuthToken>),
-    Error(String),
+struct ApplicationAuth {
+    current_state: Bind<AuthState, Error>,
+    previous_state: Option<AuthState>,
+
+    yt_client: Option<YtMusic<OAuthToken>>,
 }
 
 pub struct Application {
-    auth_state: AuthState,
-    auth_rx: Receiver<AuthEvent>,
+    auth: ApplicationAuth,
 }
 
 impl Application {
-    fn new(ctx: &Context) -> Self {
-        let (tx, rx) = channel();
-        auth::start_auth_flow(tx);
-        ctx.request_repaint();
+    fn new(_ctx: &Context) -> Self {
         Self {
-            auth_state: AuthState::Checking,
-            auth_rx: rx,
+            auth: ApplicationAuth {
+                current_state: Bind::new(true),
+                previous_state: None,
+
+                yt_client: None,
+            },
         }
     }
 }
 
 impl App for Application {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        while let Ok(event) = self.auth_rx.try_recv() {
-            match event {
-                AuthEvent::Checking => self.auth_state = AuthState::Checking,
-                AuthEvent::CodeRequired {
-                    user_code,
-                    verification_url,
-                } => {
-                    self.auth_state = AuthState::Required {
-                        user_code,
-                        url: verification_url,
-                    };
-                }
-                AuthEvent::Authenticated(yt) => {
-                    self.auth_state = AuthState::LoggedIn(yt);
-                }
-                AuthEvent::Error(msg) => self.auth_state = AuthState::Error(msg),
-            }
+        ctx.plugin_or_default::<egui_async::EguiAsyncPlugin>();
+
+        // process_auth if no ytclient is provided
+        if self.auth.yt_client.is_none() {
+            self.process_auth(ctx);
+            ctx.request_repaint_after_secs(0.1);
+            return;
         }
 
         CentralPanel::default().show(ctx, |ui| {
-            ui.centered_and_justified(|ui| match &self.auth_state {
-                AuthState::Checking => {
-                    ui.vertical_centered(|ui| {
-                        ui.spinner();
-                        ui.label(t!("auth.checking"));
-                    });
-                }
-                AuthState::Required { user_code, url } => {
-                    ui.vertical_centered(|ui| {
-                        ui.heading(t!("auth.required_title"));
-                        ui.add_space(10.0);
-                        ui.label(t!("auth.required_instruction"));
-
-                        ui.add_space(10.0);
-                        if ui
-                            .button(RichText::new(user_code).heading().strong())
-                            .clicked()
-                        {
-                            ui.ctx().copy_text(user_code.clone());
-                        }
-                        ui.small(t!("auth.copy_prompt"));
-
-                        ui.add_space(20.0);
-                        ui.hyperlink(url);
-
-                        ui.add_space(20.0);
-                        ui.spinner();
-                        ui.label(t!("auth.waiting"));
-                    });
-                }
-                AuthState::LoggedIn(_yt) => {
-                    ui.heading(t!("auth.success_title"));
-                    ui.label(t!("auth.welcome"));
-                }
-                AuthState::Error(e) => {
-                    ui.colored_label(
-                        egui::Color32::RED,
-                        format!("{}{}", t!("auth.error_prefix"), e),
-                    );
-                }
-            });
+            ui.heading(t!("auth.success_title"));
+            ui.label(t!("auth.welcome"));
         });
     }
 }
