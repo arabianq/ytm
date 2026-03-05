@@ -1,4 +1,5 @@
 mod gui;
+mod auth;
 
 use anyhow::Result;
 use clap::Parser;
@@ -13,6 +14,9 @@ i18n!("locales");
 struct Args {}
 
 fn main() -> Result<()> {
+    if let Err(e) = dotenv::dotenv() {
+        eprintln!("Warning: Failed to load .env file: {}", e);
+    }
     env_logger::init();
 
     let _args = Args::parse();
