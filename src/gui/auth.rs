@@ -60,21 +60,11 @@ async fn begin_auth() -> Result<AuthState> {
 
     let client_id = env::var("CLIENT_ID")
         .map(|s| s.trim().to_string())
-        .map_err(|_| anyhow!(t!("config.client_id_not_found")));
+        .map_err(|_| anyhow!(t!("config.client_id_not_found")))?;
 
     let client_secret = env::var("CLIENT_SECRET")
         .map(|s| s.trim().to_string())
-        .map_err(|_| anyhow!(t!("config.client_secret_not_found")));
-
-    if let Err(e) = client_id {
-        return Err(anyhow!(e));
-    }
-    let client_id = client_id.unwrap();
-
-    if let Err(e) = client_secret {
-        return Err(anyhow!(e));
-    }
-    let client_secret = client_secret.unwrap();
+        .map_err(|_| anyhow!(t!("config.client_secret_not_found")))?;
 
     log::info!("Starting OAuth flow with CLIENT_ID and CLIENT_SECRET");
 
@@ -182,7 +172,7 @@ impl Application {
                     });
                 }
                 Some(AuthState::LoggedIn(_)) => {
-                    assert!(false, "UNREACHABLE");
+                    unreachable!("UNREACHABLE");
                 }
             },
             StateWithData::Idle => match &self.auth.previous_state {
