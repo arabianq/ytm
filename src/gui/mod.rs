@@ -2,11 +2,12 @@ use anyhow::{Result, anyhow};
 use rust_i18n::t;
 
 use eframe::{App, HardwareAcceleration, NativeOptions};
-use egui::{CentralPanel, Context, Vec2, ViewportBuilder, RichText};
+use egui::{CentralPanel, ComboBox, Context, RichText, TopBottomPanel, Vec2, ViewportBuilder};
 use std::sync::mpsc::{Receiver, channel};
 use ytmapi_rs::{auth::OAuthToken, YtMusic};
 
 use crate::auth::{self, AuthEvent};
+use rust_i18n::available_locales;
 
 /// Состояние интерфейса
 enum AppState {
@@ -48,6 +49,25 @@ impl App for Application {
                 AuthEvent::Error(msg) => self.state = AppState::Error(msg),
             }
         }
+
+        TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let current_locale = rust_i18n::locale();
+                let mut selected_locale = current_locale.to_string();
+
+                ComboBox::from_id_salt("locale_selector")
+                    .selected_text(&selected_locale)
+                    .show_ui(ui, |ui| {
+                        for locale in available_locales() {
+                            ui.selectable_value(&mut selected_locale, locale.to_string(), locale);
+                        }
+                    });
+
+                if selected_locale != *current_locale {
+                    rust_i18n::set_locale(&selected_locale);
+                }
+            });
+        });
 
         CentralPanel::default().show(ctx, |ui| {
             ui.centered_and_justified(|ui| {
