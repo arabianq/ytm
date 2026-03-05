@@ -2,9 +2,9 @@ use anyhow::{Result, anyhow};
 use rust_i18n::t;
 
 use eframe::{App, HardwareAcceleration, NativeOptions};
-use egui::{CentralPanel, Context, Vec2, ViewportBuilder, RichText};
+use egui::{CentralPanel, Context, RichText, Vec2, ViewportBuilder};
 use std::sync::mpsc::{Receiver, channel};
-use ytmapi_rs::{auth::OAuthToken, YtMusic};
+use ytmapi_rs::{YtMusic, auth::OAuthToken};
 
 use crate::auth::{self, AuthEvent};
 
@@ -37,54 +37,64 @@ impl Application {
 impl App for Application {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Ok(event) = self.auth_rx.try_recv() {
-            match event { 
+            match event {
                 AuthEvent::Checking => self.state = AppState::Checking,
-                AuthEvent::CodeRequired { user_code, verification_url } => {
-                    self.state = AppState::AuthRequired { user_code, url: verification_url };
-                },
+                AuthEvent::CodeRequired {
+                    user_code,
+                    verification_url,
+                } => {
+                    self.state = AppState::AuthRequired {
+                        user_code,
+                        url: verification_url,
+                    };
+                }
                 AuthEvent::Authenticated(yt) => {
                     self.state = AppState::LoggedIn(yt);
-                },
+                }
                 AuthEvent::Error(msg) => self.state = AppState::Error(msg),
             }
         }
 
         CentralPanel::default().show(ctx, |ui| {
-            ui.centered_and_justified(|ui| {
-                match &self.state {
-                    AppState::Startup | AppState::Checking => {
-                        ui.vertical_centered(|ui| {
-                            ui.spinner();
-                            ui.label(t!("auth.checking"));
-                        });
-                    },
-                    AppState::AuthRequired { user_code, url } => {
-                        ui.vertical_centered(|ui| {
-                            ui.heading(t!("auth.required_title"));
-                            ui.add_space(10.0);
-                            ui.label(t!("auth.required_instruction"));
-                            
-                            ui.add_space(10.0);
-                            if ui.button(RichText::new(user_code).heading().strong()).clicked() {
-                                ui.ctx().copy_text(user_code.clone());
-                            }
-                            ui.small(t!("auth.copy_prompt"));
+            ui.centered_and_justified(|ui| match &self.state {
+                AppState::Startup | AppState::Checking => {
+                    ui.vertical_centered(|ui| {
+                        ui.spinner();
+                        ui.label(t!("auth.checking"));
+                    });
+                }
+                AppState::AuthRequired { user_code, url } => {
+                    ui.vertical_centered(|ui| {
+                        ui.heading(t!("auth.required_title"));
+                        ui.add_space(10.0);
+                        ui.label(t!("auth.required_instruction"));
 
-                            ui.add_space(20.0);
-                            ui.hyperlink(url);
-                            
-                            ui.add_space(20.0);
-                            ui.spinner();
-                            ui.label(t!("auth.waiting"));
-                        });
-                    },
-                    AppState::LoggedIn(_yt) => {
-                        ui.heading(t!("auth.success_title"));
-                        ui.label(t!("auth.welcome"));
-                    },
-                    AppState::Error(e) => {
-                        ui.colored_label(egui::Color32::RED, format!("{}{}", t!("auth.error_prefix"), e));
-                    }
+                        ui.add_space(10.0);
+                        if ui
+                            .button(RichText::new(user_code).heading().strong())
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(user_code.clone());
+                        }
+                        ui.small(t!("auth.copy_prompt"));
+
+                        ui.add_space(20.0);
+                        ui.hyperlink(url);
+
+                        ui.add_space(20.0);
+                        ui.spinner();
+                        ui.label(t!("auth.waiting"));
+                    });
+                }
+                AppState::LoggedIn(_yt) => {
+                    ui.heading(t!("auth.success_title"));
+                    ui.label(t!("auth.welcome"));
+                }
+                AppState::Error(e) => {
+                    ui.colored_label(
+                        egui::Color32::RED,
+                        format!("{}{}", t!("auth.error_prefix"), e),
+                    );
                 }
             });
         });
