@@ -28,7 +28,7 @@ pub enum AuthState {
 }
 
 async fn begin_auth(client_id: String) -> Result<AuthState> {
-    let config_path = misc::get_config_path()?;
+    let config_path = misc::get_config_path().await?;
     let token_path = config_path.join("token.json");
 
     // Attemp to read saved token.json if exists
@@ -80,7 +80,7 @@ async fn finish_auth(
         }
     };
 
-    let config_path = misc::get_config_path()?;
+    let config_path = misc::get_config_path().await?;
     let token_path = config_path.join("token.json");
 
     let saved_token_json = serde_json::to_vec(&token)?;
