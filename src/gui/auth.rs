@@ -7,7 +7,6 @@ use egui_async::StateWithData;
 use anyhow::{Result, anyhow};
 use derivative::Derivative;
 use rust_i18n::t;
-use serde::{Deserialize, Serialize};
 use std::{env, time::Duration};
 use tokio::{fs, time::sleep};
 
@@ -30,11 +29,6 @@ pub enum AuthState {
     LoggedIn(YtMusic<OAuthToken>),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct SavedToken {
-    token: OAuthToken,
-}
-
 async fn begin_auth() -> Result<AuthState> {
     let config_path = misc::get_config_path()?;
     let token_path = config_path.join("token.json");
@@ -43,8 +37,8 @@ async fn begin_auth() -> Result<AuthState> {
     if token_path.exists() {
         match fs::read(&token_path).await {
             Ok(file_content) => {
-                if let Ok(saved_token) = serde_json::from_slice::<SavedToken>(&file_content) {
-                    let yt = YtMusic::from_auth_token(saved_token.token);
+                if let Ok(saved_token) = serde_json::from_slice::<OAuthToken>(&file_content) {
+                    let yt = YtMusic::from_auth_token(saved_token);
                     return Ok(AuthState::LoggedIn(yt));
                 } else {
                     fs::remove_file(&token_path).await?;
@@ -105,10 +99,7 @@ async fn finish_auth(
     let config_path = misc::get_config_path()?;
     let token_path = config_path.join("token.json");
 
-    let saved_token = SavedToken {
-        token: token.clone(),
-    };
-    let saved_token_json = serde_json::to_vec(&saved_token)?;
+    let saved_token_json = serde_json::to_vec(&token)?;
     match fs::write(&token_path, &saved_token_json).await {
         Ok(_) => {
             log::info!(
