@@ -1,14 +1,13 @@
 use crate::gui::Application;
 use crate::misc;
 
-use egui::{CentralPanel, Color32, Context, RichText};
+use egui::{Align2, Area, Color32, Frame, Id, RichText, Ui, Vec2};
 use egui_async::StateWithData;
 
 use anyhow::{Result, anyhow};
 use derivative::Derivative;
 use rust_i18n::t;
-use serde::{Deserialize, Serialize};
-use std::{env, time::Duration};
+use std::time::Duration;
 use tokio::{fs, time::sleep};
 
 use ytmapi_rs::{
@@ -21,8 +20,6 @@ use ytmapi_rs::{
 pub enum AuthState {
     Required {
         client: Client,
-        client_id: String,
-        client_secret: String,
         #[derivative(Debug = "ignore")]
         code: OAuthDeviceCode,
         url: String,
@@ -30,12 +27,7 @@ pub enum AuthState {
     LoggedIn(YtMusic<OAuthToken>),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct SavedToken {
-    token: OAuthToken,
-}
-
-async fn begin_auth() -> Result<AuthState> {
+async fn begin_auth(client_id: String) -> Result<AuthState> {
     let config_path = misc::get_config_path()?;
     let token_path = config_path.join("token.json");
 
@@ -43,8 +35,8 @@ async fn begin_auth() -> Result<AuthState> {
     if token_path.exists() {
         match fs::read(&token_path).await {
             Ok(file_content) => {
-                if let Ok(saved_token) = serde_json::from_slice::<SavedToken>(&file_content) {
-                    let yt = YtMusic::from_auth_token(saved_token.token);
+                if let Ok(saved_token) = serde_json::from_slice::<OAuthToken>(&file_content) {
+                    let yt = YtMusic::from_auth_token(saved_token);
                     return Ok(AuthState::LoggedIn(yt));
                 } else {
                     fs::remove_file(&token_path).await?;
@@ -58,24 +50,10 @@ async fn begin_auth() -> Result<AuthState> {
 
     let client = Client::new()?;
 
-    let client_id = env::var("CLIENT_ID")
-        .map(|s| s.trim().to_string())
-        .map_err(|_| anyhow!(t!("config.client_id_not_found")))?;
-
-    let client_secret = env::var("CLIENT_SECRET")
-        .map(|s| s.trim().to_string())
-        .map_err(|_| anyhow!(t!("config.client_secret_not_found")))?;
-
     log::info!("Starting OAuth flow with CLIENT_ID and CLIENT_SECRET");
 
-    match ytmapi_rs::generate_oauth_code_and_url(&client, &client_id).await {
-        Ok((code, url)) => Ok(AuthState::Required {
-            client,
-            client_id,
-            client_secret,
-            code,
-            url,
-        }),
+    match ytmapi_rs::generate_oauth_code_and_url(&client, client_id).await {
+        Ok((code, url)) => Ok(AuthState::Required { client, code, url }),
         Err(e) => Err(anyhow!(e)),
     }
 }
@@ -105,10 +83,7 @@ async fn finish_auth(
     let config_path = misc::get_config_path()?;
     let token_path = config_path.join("token.json");
 
-    let saved_token = SavedToken {
-        token: token.clone(),
-    };
-    let saved_token_json = serde_json::to_vec(&saved_token)?;
+    let saved_token_json = serde_json::to_vec(&token)?;
     match fs::write(&token_path, &saved_token_json).await {
         Ok(_) => {
             log::info!(
@@ -127,49 +102,60 @@ async fn finish_auth(
 }
 
 impl Application {
-    pub fn process_auth(&mut self, ctx: &Context) {
-        CentralPanel::default().show(ctx, |ui| match self.auth.current_state.state() {
+    pub fn process_auth(&mut self, ui: &mut Ui) {
+        match self.auth.current_state.state() {
             StateWithData::Pending => match &self.auth.previous_state {
                 None => {
-                    ui.vertical_centered(|ui| {
-                        ui.spinner();
-                        ui.label(t!("auth.checking"))
-                    });
+                    Area::new(Id::new("auth_checking"))
+                        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                        .show(ui.ctx(), |ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.spinner();
+                                ui.label(t!("auth.checking"))
+                            });
+                        });
                 }
                 Some(AuthState::Required {
                     client: _,
-                    client_id: _,
-                    client_secret: _,
                     code: _,
                     url,
                 }) => {
-                    ui.vertical_centered(|ui| {
-                        let user_code = url
-                            .split("user_code=")
-                            .nth(1)
-                            .unwrap_or("UNKNOWN")
-                            .to_string();
+                    Area::new(Id::new("auth_processing"))
+                        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                        .show(ui.ctx(), |ui| {
+                            Frame::group(ui.style())
+                                .corner_radius(8.0)
+                                .inner_margin(16.0)
+                                .show(ui, |ui| {
+                                    ui.vertical_centered(|ui| {
+                                        let user_code = url
+                                            .split("user_code=")
+                                            .nth(1)
+                                            .unwrap_or("UNKNOWN")
+                                            .to_string();
 
-                        ui.heading(t!("auth.required_title"));
-                        ui.add_space(10.0);
-                        ui.label(t!("auth.required_instruction"));
+                                        ui.heading(t!("auth.required_title"));
+                                        ui.add_space(10.0);
+                                        ui.label(t!("auth.required_instruction"));
 
-                        ui.add_space(10.0);
-                        if ui
-                            .button(RichText::new(&user_code).heading().strong())
-                            .clicked()
-                        {
-                            ui.ctx().copy_text(user_code.clone());
-                        }
-                        ui.small(t!("auth.copy_prompt"));
+                                        ui.add_space(10.0);
+                                        if ui
+                                            .button(RichText::new(&user_code).heading().strong())
+                                            .clicked()
+                                        {
+                                            ui.ctx().copy_text(user_code.clone());
+                                        }
+                                        ui.small(t!("auth.copy_prompt"));
 
-                        ui.add_space(20.0);
-                        ui.hyperlink(url);
+                                        ui.add_space(20.0);
+                                        ui.hyperlink(url);
 
-                        ui.add_space(20.0);
-                        ui.spinner();
-                        ui.label(t!("auth.waiting"));
-                    });
+                                        ui.add_space(20.0);
+                                        ui.spinner();
+                                        ui.label(t!("auth.waiting"));
+                                    });
+                                });
+                        });
                 }
                 Some(AuthState::LoggedIn(_)) => {
                     unreachable!("UNREACHABLE");
@@ -177,19 +163,19 @@ impl Application {
             },
             StateWithData::Idle => match &self.auth.previous_state {
                 None => {
-                    self.auth.current_state.request(begin_auth());
+                    self.auth
+                        .current_state
+                        .request(begin_auth(self.auth.client_id.clone().unwrap()));
                 }
                 Some(AuthState::Required {
                     client,
-                    client_id,
-                    client_secret,
                     code,
                     url: _,
                 }) => {
                     self.auth.current_state.request(finish_auth(
                         client.clone(),
-                        client_id.clone(),
-                        client_secret.clone(),
+                        self.auth.client_id.clone().unwrap(),
+                        self.auth.client_secret.clone().unwrap(),
                         code.clone(),
                     ));
                 }
@@ -200,17 +186,9 @@ impl Application {
                 }
             },
             StateWithData::Finished(state) => match state {
-                AuthState::Required {
-                    client,
-                    client_id,
-                    client_secret,
-                    code,
-                    url,
-                } => {
+                AuthState::Required { client, code, url } => {
                     self.auth.previous_state = Some(AuthState::Required {
                         client: client.clone(),
-                        client_id: client_id.clone(),
-                        client_secret: client_secret.clone(),
                         code: code.clone(),
                         url: url.clone(),
                     });
@@ -226,6 +204,6 @@ impl Application {
             StateWithData::Failed(e) => {
                 ui.colored_label(Color32::RED, format!("{}{}", t!("auth.error_prefix"), e));
             }
-        });
+        }
     }
 }

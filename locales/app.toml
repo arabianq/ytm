@@ -42,3 +42,6 @@ en = "OAuth request error: {error}. Check your Client ID."
 
 [auth.auth_error]
 en = "Auth error: {error}"
+
+[auth.retry_button]
+en = "Retry"
