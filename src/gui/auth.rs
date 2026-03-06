@@ -7,7 +7,7 @@ use egui_async::StateWithData;
 use anyhow::{Result, anyhow};
 use derivative::Derivative;
 use rust_i18n::t;
-use std::{env, time::Duration};
+use std::time::Duration;
 use tokio::{fs, time::sleep};
 
 use ytmapi_rs::{
@@ -20,8 +20,6 @@ use ytmapi_rs::{
 pub enum AuthState {
     Required {
         client: Client,
-        client_id: String,
-        client_secret: String,
         #[derivative(Debug = "ignore")]
         code: OAuthDeviceCode,
         url: String,
@@ -29,7 +27,7 @@ pub enum AuthState {
     LoggedIn(YtMusic<OAuthToken>),
 }
 
-async fn begin_auth() -> Result<AuthState> {
+async fn begin_auth(client_id: String) -> Result<AuthState> {
     let config_path = misc::get_config_path()?;
     let token_path = config_path.join("token.json");
 
@@ -52,24 +50,10 @@ async fn begin_auth() -> Result<AuthState> {
 
     let client = Client::new()?;
 
-    let client_id = env::var("CLIENT_ID")
-        .map(|s| s.trim().to_string())
-        .map_err(|_| anyhow!(t!("config.client_id_not_found")))?;
-
-    let client_secret = env::var("CLIENT_SECRET")
-        .map(|s| s.trim().to_string())
-        .map_err(|_| anyhow!(t!("config.client_secret_not_found")))?;
-
     log::info!("Starting OAuth flow with CLIENT_ID and CLIENT_SECRET");
 
-    match ytmapi_rs::generate_oauth_code_and_url(&client, &client_id).await {
-        Ok((code, url)) => Ok(AuthState::Required {
-            client,
-            client_id,
-            client_secret,
-            code,
-            url,
-        }),
+    match ytmapi_rs::generate_oauth_code_and_url(&client, client_id).await {
+        Ok((code, url)) => Ok(AuthState::Required { client, code, url }),
         Err(e) => Err(anyhow!(e)),
     }
 }
@@ -129,8 +113,6 @@ impl Application {
                 }
                 Some(AuthState::Required {
                     client: _,
-                    client_id: _,
-                    client_secret: _,
                     code: _,
                     url,
                 }) => {
@@ -168,19 +150,19 @@ impl Application {
             },
             StateWithData::Idle => match &self.auth.previous_state {
                 None => {
-                    self.auth.current_state.request(begin_auth());
+                    self.auth
+                        .current_state
+                        .request(begin_auth(self.auth.client_id.clone().unwrap()));
                 }
                 Some(AuthState::Required {
                     client,
-                    client_id,
-                    client_secret,
                     code,
                     url: _,
                 }) => {
                     self.auth.current_state.request(finish_auth(
                         client.clone(),
-                        client_id.clone(),
-                        client_secret.clone(),
+                        self.auth.client_id.clone().unwrap(),
+                        self.auth.client_secret.clone().unwrap(),
                         code.clone(),
                     ));
                 }
@@ -191,17 +173,9 @@ impl Application {
                 }
             },
             StateWithData::Finished(state) => match state {
-                AuthState::Required {
-                    client,
-                    client_id,
-                    client_secret,
-                    code,
-                    url,
-                } => {
+                AuthState::Required { client, code, url } => {
                     self.auth.previous_state = Some(AuthState::Required {
                         client: client.clone(),
-                        client_id: client_id.clone(),
-                        client_secret: client_secret.clone(),
                         code: code.clone(),
                         url: url.clone(),
                     });
