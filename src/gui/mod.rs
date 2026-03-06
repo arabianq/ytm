@@ -5,7 +5,10 @@ use rust_i18n::t;
 use std::env;
 
 use eframe::{App, HardwareAcceleration, NativeOptions};
-use egui::{CentralPanel, Context, TextEdit, Vec2, ViewportBuilder};
+use egui::{
+    Align2, Area, CentralPanel, Context, Frame, Id, TextEdit, Vec2,
+    ViewportBuilder, vec2,
+};
 use egui_async::Bind;
 
 use ytmapi_rs::{YtMusic, auth::OAuthToken};
@@ -29,7 +32,9 @@ pub struct Application {
 }
 
 impl Application {
-    fn new(_ctx: &Context) -> Self {
+    fn new(ctx: &Context) -> Self {
+        ctx.set_zoom_factor(1.5);
+
         let client_id = env::var("CLIENT_ID")
             .map(|s| Some(s.trim().to_string()))
             .map_err(|_| anyhow!(t!("config.client_id_not_found")))
@@ -59,36 +64,49 @@ impl Application {
 impl App for Application {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.plugin_or_default::<egui_async::EguiAsyncPlugin>();
+        CentralPanel::default().show(ctx, |ui| {
+            if self.auth.yt_client.is_none() {
+                // process_auth if no ytclient is provided
+                if self.auth.client_id.is_some() && self.auth.client_secret.is_some() {
+                    self.process_auth(ui);
+                } else {
+                    // client_id or client_secret is not provided
+                    Area::new(Id::new("auth_form"))
+                        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                        .show(ctx, |ui| {
+                            Frame::group(ui.style())
+                                .corner_radius(8.0)
+                                .inner_margin(16.0)
+                                .show(ui, |ui| {
+                                    ui.label("Client ID");
+                                    ui.add(TextEdit::singleline(&mut self.auth.client_id_input));
 
-        // process_auth if no ytclient is provided
-        if self.auth.yt_client.is_none() {
-            if self.auth.client_id.is_some() && self.auth.client_secret.is_some() {
-                self.process_auth(ctx);
-            } else {
-                CentralPanel::default().show(ctx, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label("Client ID:");
-                        ui.add(TextEdit::singleline(&mut self.auth.client_id_input));
+                                    ui.label("Client Secret");
+                                    ui.add(TextEdit::singleline(
+                                        &mut self.auth.client_secret_input,
+                                    ));
 
-                        ui.label("Client Secret:");
-                        ui.add(TextEdit::singleline(&mut self.auth.client_secret_input));
+                                    ui.vertical_centered(|ui| {
+                                        ui.add_space(16.0 - ui.spacing().item_spacing.y);
 
-                        if ui.button(t!("auth.retry_button")).clicked() {
-                            self.auth.client_id = Some(self.auth.client_id_input.clone());
-                            self.auth.client_id_input = String::new();
+                                        if ui.button(t!("auth.retry_button")).clicked() {
+                                            self.auth.client_id =
+                                                Some(self.auth.client_secret_input.clone());
+                                            self.auth.client_secret =
+                                                Some(self.auth.client_secret_input.clone());
 
-                            self.auth.client_secret = Some(self.auth.client_secret_input.clone());
-                            self.auth.client_secret_input = String::new();
-                        }
-                    });
-                });
+                                            self.auth.client_id_input.clear();
+                                            self.auth.client_secret_input.clear();
+                                        }
+                                    });
+                                });
+                        });
+                }
+
+                ctx.request_repaint_after_secs(0.1);
+                return;
             }
 
-            ctx.request_repaint_after_secs(0.1);
-            return;
-        }
-
-        CentralPanel::default().show(ctx, |ui| {
             ui.heading(t!("auth.success_title"));
             ui.label(t!("auth.welcome"));
         });
@@ -103,8 +121,8 @@ pub fn run() -> Result<()> {
 
         viewport: ViewportBuilder::default()
             .with_app_id("ytm")
-            .with_inner_size(Vec2::new(1200.0, 800.0))
-            .with_min_inner_size(Vec2::new(800.0, 600.0)),
+            .with_inner_size(vec2(1200.0, 800.0))
+            .with_min_inner_size(vec2(800.0, 600.0)),
 
         ..Default::default()
     };

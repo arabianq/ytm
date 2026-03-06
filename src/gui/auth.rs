@@ -1,7 +1,7 @@
 use crate::gui::Application;
 use crate::misc;
 
-use egui::{CentralPanel, Color32, Context, RichText};
+use egui::{Align2, Area, Color32, Frame, Id, RichText, Ui, Vec2};
 use egui_async::StateWithData;
 
 use anyhow::{Result, anyhow};
@@ -102,47 +102,60 @@ async fn finish_auth(
 }
 
 impl Application {
-    pub fn process_auth(&mut self, ctx: &Context) {
-        CentralPanel::default().show(ctx, |ui| match self.auth.current_state.state() {
+    pub fn process_auth(&mut self, ui: &mut Ui) {
+        match self.auth.current_state.state() {
             StateWithData::Pending => match &self.auth.previous_state {
                 None => {
-                    ui.vertical_centered(|ui| {
-                        ui.spinner();
-                        ui.label(t!("auth.checking"))
-                    });
+                    Area::new(Id::new("auth_checking"))
+                        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                        .show(ui.ctx(), |ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.spinner();
+                                ui.label(t!("auth.checking"))
+                            });
+                        });
                 }
                 Some(AuthState::Required {
                     client: _,
                     code: _,
                     url,
                 }) => {
-                    ui.vertical_centered(|ui| {
-                        let user_code = url
-                            .split("user_code=")
-                            .nth(1)
-                            .unwrap_or("UNKNOWN")
-                            .to_string();
+                    Area::new(Id::new("auth_processing"))
+                        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                        .show(ui.ctx(), |ui| {
+                            Frame::group(ui.style())
+                                .corner_radius(8.0)
+                                .inner_margin(16.0)
+                                .show(ui, |ui| {
+                                    ui.vertical_centered(|ui| {
+                                        let user_code = url
+                                            .split("user_code=")
+                                            .nth(1)
+                                            .unwrap_or("UNKNOWN")
+                                            .to_string();
 
-                        ui.heading(t!("auth.required_title"));
-                        ui.add_space(10.0);
-                        ui.label(t!("auth.required_instruction"));
+                                        ui.heading(t!("auth.required_title"));
+                                        ui.add_space(10.0);
+                                        ui.label(t!("auth.required_instruction"));
 
-                        ui.add_space(10.0);
-                        if ui
-                            .button(RichText::new(&user_code).heading().strong())
-                            .clicked()
-                        {
-                            ui.ctx().copy_text(user_code.clone());
-                        }
-                        ui.small(t!("auth.copy_prompt"));
+                                        ui.add_space(10.0);
+                                        if ui
+                                            .button(RichText::new(&user_code).heading().strong())
+                                            .clicked()
+                                        {
+                                            ui.ctx().copy_text(user_code.clone());
+                                        }
+                                        ui.small(t!("auth.copy_prompt"));
 
-                        ui.add_space(20.0);
-                        ui.hyperlink(url);
+                                        ui.add_space(20.0);
+                                        ui.hyperlink(url);
 
-                        ui.add_space(20.0);
-                        ui.spinner();
-                        ui.label(t!("auth.waiting"));
-                    });
+                                        ui.add_space(20.0);
+                                        ui.spinner();
+                                        ui.label(t!("auth.waiting"));
+                                    });
+                                });
+                        });
                 }
                 Some(AuthState::LoggedIn(_)) => {
                     unreachable!("UNREACHABLE");
@@ -191,6 +204,6 @@ impl Application {
             StateWithData::Failed(e) => {
                 ui.colored_label(Color32::RED, format!("{}{}", t!("auth.error_prefix"), e));
             }
-        });
+        }
     }
 }
