@@ -73,9 +73,10 @@ impl App for Application {
                                     ui.add(TextEdit::singleline(&mut self.auth.client_id_input));
 
                                     ui.label("Client Secret");
-                                    ui.add(TextEdit::singleline(
-                                        &mut self.auth.client_secret_input,
-                                    ));
+                                    ui.add(
+                                        TextEdit::singleline(&mut self.auth.client_secret_input)
+                                            .password(true),
+                                    );
 
                                     ui.vertical_centered(|ui| {
                                         ui.add_space(16.0 - ui.spacing().item_spacing.y);
