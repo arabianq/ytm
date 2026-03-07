@@ -32,7 +32,7 @@ async fn begin_auth(client_id: String) -> Result<AuthState> {
     let token_path = config_path.join("token.json");
 
     // Attemp to read saved token.json if exists
-    if token_path.exists() {
+    if fs::try_exists(&token_path).await.unwrap_or(false) {
         match fs::read(&token_path).await {
             Ok(file_content) => {
                 if let Ok(saved_token) = serde_json::from_slice::<OAuthToken>(&file_content) {
