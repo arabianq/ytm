@@ -28,6 +28,12 @@ en = "Welcome to YouTube Music"
 [auth.error_prefix]
 en = "Error: "
 
+[config.client_id_not_found]
+en = "CLIENT_ID not found in .env"
+
+[config.client_secret_not_found]
+en = "CLIENT_SECRET not found in .env"
+
 [config.client_id_is_secret]
 en = "Configuration Error: Your Client ID starts with 'GOCSPX-'. This is a Client Secret! Please swap the CLIENT_ID and CLIENT_SECRET values in your .env file."
 
