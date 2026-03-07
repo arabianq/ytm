@@ -5,7 +5,10 @@ use rust_i18n::t;
 use std::env;
 
 use eframe::{App, HardwareAcceleration, NativeOptions};
-use egui::{Align2, Area, CentralPanel, Context, Frame, Id, TextEdit, Vec2, ViewportBuilder, vec2};
+use egui::{
+    Align2, Area, CentralPanel, Context, Frame, Id, TextEdit, Vec2,
+    ViewportBuilder, vec2,
+};
 use egui_async::Bind;
 
 use ytmapi_rs::{YtMusic, auth::OAuthToken};
@@ -32,9 +35,15 @@ impl Application {
     fn new(ctx: &Context) -> Self {
         ctx.set_zoom_factor(1.5);
 
-        let client_id = env::var("CLIENT_ID").ok().map(|s| s.trim().to_string());
+        let client_id = env::var("CLIENT_ID")
+            .map(|s| Some(s.trim().to_string()))
+            .map_err(|_| anyhow!(t!("config.client_id_not_found")))
+            .unwrap_or(None);
 
-        let client_secret = env::var("CLIENT_SECRET").ok().map(|s| s.trim().to_string());
+        let client_secret = env::var("CLIENT_SECRET")
+            .map(|s| Some(s.trim().to_string()))
+            .map_err(|_| anyhow!(t!("config.client_secret_not_found")))
+            .unwrap_or(None);
 
         Self {
             auth: ApplicationAuth {
@@ -83,7 +92,7 @@ impl App for Application {
 
                                         if ui.button(t!("auth.retry_button")).clicked() {
                                             self.auth.client_id =
-                                                Some(self.auth.client_id_input.clone());
+                                                Some(self.auth.client_secret_input.clone());
                                             self.auth.client_secret =
                                                 Some(self.auth.client_secret_input.clone());
 
