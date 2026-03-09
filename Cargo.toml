@@ -44,5 +44,6 @@ eframe = { version = "0.33.3", default-features = false, features = [
     "wayland",
 ] }
 egui-async = "0.3.4"
+egui_material_icons = "0.5.0"
 
 ytmapi-rs = "0.3.1"

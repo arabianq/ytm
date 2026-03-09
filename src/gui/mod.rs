@@ -1,11 +1,15 @@
 mod auth;
+mod header;
 
 use anyhow::{Error, Result, anyhow};
 use rust_i18n::t;
 use std::env;
 
 use eframe::{App, HardwareAcceleration, NativeOptions};
-use egui::{Align2, Area, CentralPanel, Context, Frame, Id, TextEdit, Vec2, ViewportBuilder, vec2};
+use egui::{
+    Align, Align2, Area, CentralPanel, Context, Frame, Id, Layout, TextEdit, Vec2, ViewportBuilder,
+    vec2,
+};
 use egui_async::Bind;
 
 use ytmapi_rs::{YtMusic, auth::OAuthToken};
@@ -24,8 +28,15 @@ struct ApplicationAuth {
     yt_client: Option<YtMusic<OAuthToken>>,
 }
 
+#[derive(PartialEq, Eq)]
+enum ApplicationPage {
+    Main,
+    Library,
+}
+
 pub struct Application {
     auth: ApplicationAuth,
+    page: ApplicationPage,
 }
 
 impl Application {
@@ -54,6 +65,7 @@ impl Application {
 
                 yt_client: None,
             },
+            page: ApplicationPage::Main,
         }
     }
 }
@@ -105,8 +117,9 @@ impl App for Application {
                 return;
             }
 
-            ui.heading(t!("auth.success_title"));
-            ui.label(t!("auth.welcome"));
+            ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                self.draw_header(ui);
+            });
         });
     }
 }
@@ -128,7 +141,11 @@ pub fn run() -> Result<()> {
     match eframe::run_native(
         "Youtube Music",
         options,
-        Box::new(|cc| Ok(Box::new(Application::new(&cc.egui_ctx)))),
+        Box::new(|cc| {
+            egui_material_icons::initialize(&cc.egui_ctx);
+
+            Ok(Box::new(Application::new(&cc.egui_ctx)))
+        }),
     ) {
         Ok(_) => Ok(()),
         Err(e) => {

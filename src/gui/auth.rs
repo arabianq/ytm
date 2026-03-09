@@ -197,8 +197,6 @@ impl Application {
                 AuthState::LoggedIn(yt) => {
                     self.auth.previous_state = Some(AuthState::LoggedIn(yt.clone()));
                     self.auth.current_state.clear();
-                    ui.heading(t!("auth.success_title"));
-                    ui.label(t!("auth.welcome"));
                 }
             },
             StateWithData::Failed(e) => {
