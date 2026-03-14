@@ -92,7 +92,7 @@ impl App for Application {
 
                                         if ui.button(t!("auth.retry_button")).clicked() {
                                             self.auth.client_id =
-                                                Some(self.auth.client_secret_input.clone());
+                                                Some(self.auth.client_id_input.clone());
                                             self.auth.client_secret =
                                                 Some(self.auth.client_secret_input.clone());
 
