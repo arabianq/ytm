@@ -128,11 +128,8 @@ impl Application {
                                 .inner_margin(16.0)
                                 .show(ui, |ui| {
                                     ui.vertical_centered(|ui| {
-                                        let user_code = url
-                                            .split("user_code=")
-                                            .nth(1)
-                                            .unwrap_or("UNKNOWN")
-                                            .to_string();
+                                        let user_code =
+                                            url.split("user_code=").nth(1).unwrap_or("UNKNOWN");
 
                                         ui.heading(t!("auth.required_title"));
                                         ui.add_space(10.0);
@@ -140,10 +137,10 @@ impl Application {
 
                                         ui.add_space(10.0);
                                         if ui
-                                            .button(RichText::new(&user_code).heading().strong())
+                                            .button(RichText::new(user_code).heading().strong())
                                             .clicked()
                                         {
-                                            ui.ctx().copy_text(user_code.clone());
+                                            ui.ctx().copy_text(user_code.to_string());
                                         }
                                         ui.small(t!("auth.copy_prompt"));
 

@@ -5,10 +5,7 @@ use rust_i18n::t;
 use std::env;
 
 use eframe::{App, HardwareAcceleration, NativeOptions};
-use egui::{
-    Align2, Area, CentralPanel, Context, Frame, Id, TextEdit, Vec2,
-    ViewportBuilder, vec2,
-};
+use egui::{Align2, Area, CentralPanel, Context, Frame, Id, TextEdit, Vec2, ViewportBuilder, vec2};
 use egui_async::Bind;
 
 use ytmapi_rs::{YtMusic, auth::OAuthToken};
