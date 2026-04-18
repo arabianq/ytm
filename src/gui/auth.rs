@@ -104,60 +104,63 @@ async fn finish_auth(
 impl Application {
     pub fn process_auth(&mut self, ui: &mut Ui) {
         match self.auth.current_state.state() {
-            StateWithData::Pending => match &self.auth.previous_state {
-                None => {
-                    Area::new(Id::new("auth_checking"))
-                        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                        .show(ui.ctx(), |ui| {
-                            ui.vertical_centered(|ui| {
-                                ui.spinner();
-                                ui.label(t!("auth.checking"))
-                            });
-                        });
-                }
-                Some(AuthState::Required {
-                    client: _,
-                    code: _,
-                    url,
-                }) => {
-                    Area::new(Id::new("auth_processing"))
-                        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                        .show(ui.ctx(), |ui| {
-                            Frame::group(ui.style())
-                                .corner_radius(8.0)
-                                .inner_margin(16.0)
-                                .show(ui, |ui| {
-                                    ui.vertical_centered(|ui| {
-                                        let user_code =
-                                            url.split("user_code=").nth(1).unwrap_or("UNKNOWN");
-
-                                        ui.heading(t!("auth.required_title"));
-                                        ui.add_space(10.0);
-                                        ui.label(t!("auth.required_instruction"));
-
-                                        ui.add_space(10.0);
-                                        if ui
-                                            .button(RichText::new(user_code).heading().strong())
-                                            .clicked()
-                                        {
-                                            ui.ctx().copy_text(user_code.to_string());
-                                        }
-                                        ui.small(t!("auth.copy_prompt"));
-
-                                        ui.add_space(20.0);
-                                        ui.hyperlink(url);
-
-                                        ui.add_space(20.0);
-                                        ui.spinner();
-                                        ui.label(t!("auth.waiting"));
-                                    });
+            StateWithData::Pending => {
+                ui.ctx().request_repaint_after_secs(0.1);
+                match &self.auth.previous_state {
+                    None => {
+                        Area::new(Id::new("auth_checking"))
+                            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                            .show(ui.ctx(), |ui| {
+                                ui.vertical_centered(|ui| {
+                                    ui.spinner();
+                                    ui.label(t!("auth.checking"))
                                 });
-                        });
+                            });
+                    }
+                    Some(AuthState::Required {
+                        client: _,
+                        code: _,
+                        url,
+                    }) => {
+                        Area::new(Id::new("auth_processing"))
+                            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                            .show(ui.ctx(), |ui| {
+                                Frame::group(ui.style())
+                                    .corner_radius(8.0)
+                                    .inner_margin(16.0)
+                                    .show(ui, |ui| {
+                                        ui.vertical_centered(|ui| {
+                                            let user_code =
+                                                url.split("user_code=").nth(1).unwrap_or("UNKNOWN");
+
+                                            ui.heading(t!("auth.required_title"));
+                                            ui.add_space(10.0);
+                                            ui.label(t!("auth.required_instruction"));
+
+                                            ui.add_space(10.0);
+                                            if ui
+                                                .button(RichText::new(user_code).heading().strong())
+                                                .clicked()
+                                            {
+                                                ui.ctx().copy_text(user_code.to_string());
+                                            }
+                                            ui.small(t!("auth.copy_prompt"));
+
+                                            ui.add_space(20.0);
+                                            ui.hyperlink(url);
+
+                                            ui.add_space(20.0);
+                                            ui.spinner();
+                                            ui.label(t!("auth.waiting"));
+                                        });
+                                    });
+                            });
+                    }
+                    Some(AuthState::LoggedIn(_)) => {
+                        unreachable!("UNREACHABLE");
+                    }
                 }
-                Some(AuthState::LoggedIn(_)) => {
-                    unreachable!("UNREACHABLE");
-                }
-            },
+            }
             StateWithData::Idle => match &self.auth.previous_state {
                 None => {
                     self.auth

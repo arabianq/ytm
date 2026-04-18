@@ -95,7 +95,6 @@ impl App for Application {
                         });
                 }
 
-                ctx.request_repaint_after_secs(0.1);
                 return;
             }
 
