@@ -104,103 +104,118 @@ async fn finish_auth(
 impl Application {
     pub fn process_auth(&mut self, ui: &mut Ui) {
         match self.auth.current_state.state() {
-            StateWithData::Pending => match &self.auth.previous_state {
-                None => {
-                    Area::new(Id::new("auth_checking"))
-                        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                        .show(ui.ctx(), |ui| {
-                            ui.vertical_centered(|ui| {
-                                ui.spinner();
-                                ui.label(t!("auth.checking"))
-                            });
+            StateWithData::Pending => self.handle_pending_auth(ui),
+            StateWithData::Idle => self.handle_idle_auth(),
+            StateWithData::Finished(state) => self.handle_finished_auth(ui, state),
+            StateWithData::Failed(e) => self.handle_failed_auth(ui, e),
+        }
+    }
+
+    fn handle_pending_auth(&mut self, ui: &mut Ui) {
+        match &self.auth.previous_state {
+            None => {
+                Area::new(Id::new("auth_checking"))
+                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                    .show(ui.ctx(), |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.spinner();
+                            ui.label(t!("auth.checking"))
                         });
-                }
-                Some(AuthState::Required {
-                    client: _,
-                    code: _,
-                    url,
-                }) => {
-                    Area::new(Id::new("auth_processing"))
-                        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                        .show(ui.ctx(), |ui| {
-                            Frame::group(ui.style())
-                                .corner_radius(8.0)
-                                .inner_margin(16.0)
-                                .show(ui, |ui| {
-                                    ui.vertical_centered(|ui| {
-                                        let user_code =
-                                            url.split("user_code=").nth(1).unwrap_or("UNKNOWN");
+                    });
+            }
+            Some(AuthState::Required { url, .. }) => {
+                Area::new(Id::new("auth_processing"))
+                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                    .show(ui.ctx(), |ui| {
+                        Frame::group(ui.style())
+                            .corner_radius(8.0)
+                            .inner_margin(16.0)
+                            .show(ui, |ui| {
+                                ui.vertical_centered(|ui| {
+                                    let user_code =
+                                        url.split("user_code=").nth(1).unwrap_or("UNKNOWN");
 
-                                        ui.heading(t!("auth.required_title"));
-                                        ui.add_space(10.0);
-                                        ui.label(t!("auth.required_instruction"));
+                                    ui.heading(t!("auth.required_title"));
+                                    ui.add_space(10.0);
+                                    ui.label(t!("auth.required_instruction"));
 
-                                        ui.add_space(10.0);
-                                        if ui
-                                            .button(RichText::new(user_code).heading().strong())
-                                            .clicked()
-                                        {
-                                            ui.ctx().copy_text(user_code.to_string());
-                                        }
-                                        ui.small(t!("auth.copy_prompt"));
+                                    ui.add_space(10.0);
+                                    if ui
+                                        .button(RichText::new(user_code).heading().strong())
+                                        .clicked()
+                                    {
+                                        ui.ctx().copy_text(user_code.to_string());
+                                    }
+                                    ui.small(t!("auth.copy_prompt"));
 
-                                        ui.add_space(20.0);
-                                        ui.hyperlink(url);
+                                    ui.add_space(20.0);
+                                    ui.hyperlink(url);
 
-                                        ui.add_space(20.0);
-                                        ui.spinner();
-                                        ui.label(t!("auth.waiting"));
-                                    });
+                                    ui.add_space(20.0);
+                                    ui.spinner();
+                                    ui.label(t!("auth.waiting"));
                                 });
-                        });
-                }
-                Some(AuthState::LoggedIn(_)) => {
-                    unreachable!("UNREACHABLE");
-                }
-            },
-            StateWithData::Idle => match &self.auth.previous_state {
-                None => {
+                            });
+                    });
+            }
+            Some(AuthState::LoggedIn(_)) => {
+                unreachable!("UNREACHABLE");
+            }
+        }
+    }
+
+    fn handle_idle_auth(&mut self) {
+        match &self.auth.previous_state {
+            None => {
+                if let Some(client_id) = &self.auth.client_id {
                     self.auth
                         .current_state
-                        .request(begin_auth(self.auth.client_id.clone().unwrap()));
+                        .request(begin_auth(client_id.clone()));
                 }
-                Some(AuthState::Required {
-                    client,
-                    code,
-                    url: _,
-                }) => {
+            }
+            Some(AuthState::Required { client, code, .. }) => {
+                if let (Some(client_id), Some(client_secret)) =
+                    (&self.auth.client_id, &self.auth.client_secret)
+                {
                     self.auth.current_state.request(finish_auth(
                         client.clone(),
-                        self.auth.client_id.clone().unwrap(),
-                        self.auth.client_secret.clone().unwrap(),
+                        client_id.clone(),
+                        client_secret.clone(),
                         code.clone(),
                     ));
                 }
-                Some(AuthState::LoggedIn(yt)) => {
-                    self.auth.yt_client = Some(yt.clone());
-                    self.auth.current_state.clear();
-                    self.auth.previous_state.take();
-                }
-            },
-            StateWithData::Finished(state) => match state {
-                AuthState::Required { client, code, url } => {
-                    self.auth.previous_state = Some(AuthState::Required {
-                        client: client.clone(),
-                        code: code.clone(),
-                        url: url.clone(),
-                    });
-                    self.auth.current_state.clear();
-                }
-                AuthState::LoggedIn(yt) => {
-                    self.auth.previous_state = Some(AuthState::LoggedIn(yt.clone()));
-                    self.auth.current_state.clear();
-                    ui.heading(t!("auth.success_title"));
-                    ui.label(t!("auth.welcome"));
-                }
-            },
-            StateWithData::Failed(e) => {
-                ui.colored_label(Color32::RED, format!("{}{}", t!("auth.error_prefix"), e));
+            }
+            Some(AuthState::LoggedIn(yt)) => {
+                self.auth.yt_client = Some(yt.clone());
+                self.auth.current_state.clear();
+                self.auth.previous_state.take();
             }
         }
+    }
+
+    fn handle_finished_auth(&mut self, ui: &mut Ui, state: &AuthState) {
+        match state {
+            AuthState::Required { client, code, url } => {
+                self.auth.previous_state = Some(AuthState::Required {
+                    client: client.clone(),
+                    code: code.clone(),
+                    url: url.clone(),
+                });
+                self.auth.current_state.clear();
+            }
+            AuthState::LoggedIn(yt) => {
+                self.auth.previous_state = Some(AuthState::LoggedIn(yt.clone()));
+                self.auth.current_state.clear();
+                ui.heading(t!("auth.success_title"));
+                ui.label(t!("auth.welcome"));
+            }
+        }
+    }
+
+    fn handle_failed_auth(&mut self, ui: &mut Ui, error: &anyhow::Error) {
+        ui.colored_label(
+            Color32::RED,
+            format!("{}{}", t!("auth.error_prefix"), error),
+        );
     }
 }
