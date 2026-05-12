@@ -8,6 +8,7 @@ use anyhow::{Result, anyhow};
 use derivative::Derivative;
 use rust_i18n::t;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,6 +23,8 @@ use ytmapi_rs::{
 };
 
 const STABLE_CLIENT_VERSION: &str = "1.20250416.01.00";
+const BROWSER_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:88.0) Gecko/20100101 Firefox/88.0";
 
 #[derive(Clone, Debug, Default)]
 pub struct AuthBootstrap {
@@ -87,6 +90,7 @@ impl AppAuthToken {
     async fn from_cookie_str(cookie: &str) -> Result<Self> {
         let normalized = normalize_cookie_input(cookie)?;
         let client = Client::new()?;
+        ensure_cookie_session_is_logged_in(&client, &normalized).await?;
         let token = BrowserToken::from_str(&normalized, &client).await?;
         Ok(Self::Browser(token))
     }
@@ -260,6 +264,22 @@ async fn try_cookie_auth(config: &AuthBootstrap, config_path: &Path) -> Result<O
         }
     }
 
+    if let Some(cookie_header) = try_firefox_cookie_header().await? {
+        match AppAuthToken::from_cookie_str(&cookie_header).await {
+            Ok(token) => {
+                let cache_path = config_path.join("cookie.txt");
+                if let Err(error) = fs::write(&cache_path, &cookie_header).await {
+                    log::warn!(
+                        "Failed to refresh cookie cache at {}: {error}",
+                        cache_path.display()
+                    );
+                }
+                return Ok(Some(token));
+            }
+            Err(error) => errors.push(format!("firefox cookies: {error}")),
+        }
+    }
+
     for cookie_file in config_cookie_candidates(config_path) {
         if !fs::try_exists(&cookie_file).await.unwrap_or(false) {
             continue;
@@ -282,6 +302,128 @@ async fn try_cookie_auth(config: &AuthBootstrap, config_path: &Path) -> Result<O
     } else {
         Err(anyhow!("Cookie auth failed: {}", errors.join(" | ")))
     }
+}
+
+async fn ensure_cookie_session_is_logged_in(client: &Client, cookies: &str) -> Result<()> {
+    let headers = [
+        ("User-Agent", BROWSER_USER_AGENT.into()),
+        ("Cookie", cookies.into()),
+    ];
+    let response = client
+        .get_query("https://music.youtube.com/library/playlists", headers, &())
+        .await?;
+    if response.text.contains("\"LOGGED_IN\":true") {
+        Ok(())
+    } else {
+        Err(anyhow!("Cookie session is not logged in"))
+    }
+}
+
+async fn try_firefox_cookie_header() -> Result<Option<String>> {
+    let profiles_root = dirs::config_dir()
+        .ok_or_else(|| anyhow!("Failed to get user's config directory"))?
+        .join("Mozilla")
+        .join("Firefox")
+        .join("Profiles");
+
+    if !fs::try_exists(&profiles_root).await.unwrap_or(false) {
+        return Ok(None);
+    }
+
+    let mut entries = fs::read_dir(&profiles_root).await?;
+    let mut profiles = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        if entry.file_type().await?.is_dir() {
+            profiles.push(entry.path());
+        }
+    }
+
+    profiles.sort_by_key(|path| firefox_profile_rank(path));
+
+    for profile in profiles {
+        match extract_firefox_cookie_header(&profile).await {
+            Ok(Some(header)) => return Ok(Some(header)),
+            Ok(None) => {}
+            Err(error) => log::warn!(
+                "Failed to extract Firefox cookies from {}: {error}",
+                profile.display()
+            ),
+        }
+    }
+
+    Ok(None)
+}
+
+fn firefox_profile_rank(path: &Path) -> (u8, String) {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let rank = if name.contains(".default-release") {
+        0
+    } else if name.contains(".default") {
+        1
+    } else {
+        2
+    };
+    (rank, name)
+}
+
+async fn extract_firefox_cookie_header(profile_path: &Path) -> Result<Option<String>> {
+    let sqlite_path = profile_path.join("cookies.sqlite");
+    if !fs::try_exists(&sqlite_path).await.unwrap_or(false) {
+        return Ok(None);
+    }
+
+    let sqlite_path = sqlite_path.clone();
+    let header = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+        let temp_path = std::env::temp_dir().join(format!(
+            "ytm-firefox-cookies-{}.sqlite",
+            std::process::id()
+        ));
+        std::fs::copy(&sqlite_path, &temp_path)?;
+
+        let result = (|| -> Result<Option<String>> {
+            let connection = rusqlite::Connection::open(&temp_path)?;
+            let mut statement = connection.prepare(
+                "select host, name, value \
+                 from moz_cookies \
+                 where host like '%youtube.com' \
+                    or host like '%music.youtube.com' \
+                    or host like '%.youtube.com' \
+                 order by host, name",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+
+            let mut seen = HashSet::new();
+            let mut pairs = Vec::new();
+            for row in rows {
+                let (_host, name, value) = row?;
+                if seen.insert(name.clone()) {
+                    pairs.push(format!("{name}={value}"));
+                }
+            }
+
+            if pairs.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(pairs.join("; ")))
+            }
+        })();
+
+        let _ = std::fs::remove_file(&temp_path);
+        result
+    })
+    .await??;
+
+    Ok(header)
 }
 
 async fn begin_auth(config: AuthBootstrap) -> Result<AuthState> {
