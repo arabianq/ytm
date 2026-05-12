@@ -1,6 +1,6 @@
 mod auth;
 
-use anyhow::{Error, Result, anyhow};
+use anyhow::{Context as _, Error, Result, anyhow};
 use rust_i18n::t;
 use std::env;
 
@@ -13,7 +13,6 @@ use egui_async::{Bind, StateWithData};
 
 use ytmapi_rs::{
     YtMusic,
-    auth::OAuthToken,
     common::{PlaylistID, YoutubeID},
     parse::{
         GetPlaylistDetails, LibraryArtist, LibraryPlaylist, PlaylistItem, SearchResultAlbum,
@@ -21,7 +20,7 @@ use ytmapi_rs::{
     },
 };
 
-use auth::AuthState;
+use auth::{AuthState, StableOAuthToken};
 
 struct ApplicationAuth {
     client_id: Option<String>,
@@ -32,7 +31,7 @@ struct ApplicationAuth {
     current_state: Bind<AuthState, Error>,
     previous_state: Option<AuthState>,
 
-    yt_client: Option<YtMusic<OAuthToken>>,
+    yt_client: Option<YtMusic<StableOAuthToken>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -442,11 +441,23 @@ impl App for Application {
     }
 }
 
-async fn load_library_snapshot(yt: YtMusic<OAuthToken>) -> Result<LibrarySnapshot> {
-    let playlists = yt.get_library_playlists().await?;
-    let songs = yt.get_library_songs().await?;
-    let albums = yt.get_library_albums().await?;
-    let artists = yt.get_library_artists().await?;
+async fn load_library_snapshot(yt: YtMusic<StableOAuthToken>) -> Result<LibrarySnapshot> {
+    let playlists = yt
+        .get_library_playlists()
+        .await
+        .context("failed to load playlists")?;
+    let songs = yt
+        .get_library_songs()
+        .await
+        .context("failed to load songs")?;
+    let albums = yt
+        .get_library_albums()
+        .await
+        .context("failed to load albums")?;
+    let artists = yt
+        .get_library_artists()
+        .await
+        .context("failed to load artists")?;
 
     Ok(LibrarySnapshot {
         playlists,
@@ -457,12 +468,18 @@ async fn load_library_snapshot(yt: YtMusic<OAuthToken>) -> Result<LibrarySnapsho
 }
 
 async fn load_playlist_snapshot(
-    yt: YtMusic<OAuthToken>,
+    yt: YtMusic<StableOAuthToken>,
     playlist_id: String,
 ) -> Result<PlaylistSnapshot> {
     let playlist_id = PlaylistID::from_raw(playlist_id);
-    let details = yt.get_playlist_details(playlist_id.clone()).await?;
-    let tracks = yt.get_playlist_tracks(playlist_id).await?;
+    let details = yt
+        .get_playlist_details(playlist_id.clone())
+        .await
+        .context("failed to load playlist details")?;
+    let tracks = yt
+        .get_playlist_tracks(playlist_id)
+        .await
+        .context("failed to load playlist tracks")?;
 
     Ok(PlaylistSnapshot { details, tracks })
 }

@@ -7,13 +7,46 @@ use egui_async::StateWithData;
 use anyhow::{Result, anyhow};
 use derivative::Derivative;
 use rust_i18n::t;
+use std::borrow::Cow;
 use std::time::Duration;
 use tokio::{fs, time::sleep};
 
 use ytmapi_rs::{
     Client, YtMusic,
-    auth::{OAuthToken, oauth::OAuthDeviceCode},
+    auth::{AuthToken, LoggedIn, OAuthToken, RawResult, oauth::OAuthDeviceCode},
+    parse::ProcessedResult,
 };
+
+const STABLE_CLIENT_VERSION: &str = "1.20250416.01.00";
+
+#[derive(Clone, Debug)]
+pub struct StableOAuthToken {
+    inner: OAuthToken,
+}
+
+impl StableOAuthToken {
+    pub fn from_oauth_token(inner: OAuthToken) -> Self {
+        Self { inner }
+    }
+}
+
+impl AuthToken for StableOAuthToken {
+    fn headers(&self) -> ytmapi_rs::error::Result<impl IntoIterator<Item = (&str, Cow<'_, str>)>> {
+        self.inner.headers()
+    }
+
+    fn client_version(&self) -> Cow<'_, str> {
+        STABLE_CLIENT_VERSION.into()
+    }
+
+    fn deserialize_response<'a, Q>(
+        raw: RawResult<'a, Q, Self>,
+    ) -> ytmapi_rs::error::Result<ProcessedResult<'a, Q>> {
+        ProcessedResult::try_from(raw)
+    }
+}
+
+impl LoggedIn for StableOAuthToken {}
 
 #[derive(Derivative, Clone)]
 #[derivative(Debug)]
@@ -24,7 +57,21 @@ pub enum AuthState {
         code: OAuthDeviceCode,
         url: String,
     },
-    LoggedIn(YtMusic<OAuthToken>),
+    LoggedIn(YtMusic<StableOAuthToken>),
+}
+
+async fn save_token(token: &OAuthToken) -> Result<()> {
+    let config_path = misc::get_config_path().await?;
+    let token_path = config_path.join("token.json");
+    let saved_token_json = serde_json::to_vec(token)?;
+
+    fs::write(&token_path, &saved_token_json).await?;
+    log::info!(
+        "Successfully saved token to {path}",
+        path = token_path.display()
+    );
+
+    Ok(())
 }
 
 async fn begin_auth(client_id: String) -> Result<AuthState> {
@@ -36,8 +83,21 @@ async fn begin_auth(client_id: String) -> Result<AuthState> {
         match fs::read(&token_path).await {
             Ok(file_content) => {
                 if let Ok(saved_token) = serde_json::from_slice::<OAuthToken>(&file_content) {
-                    let yt = YtMusic::from_auth_token(saved_token);
-                    return Ok(AuthState::LoggedIn(yt));
+                    let mut yt = YtMusic::from_auth_token(saved_token);
+                    match yt.refresh_token().await {
+                        Ok(refreshed_token) => {
+                            if let Err(e) = save_token(&refreshed_token).await {
+                                log::error!("Failed to save refreshed token: {e}");
+                            }
+                            return Ok(AuthState::LoggedIn(YtMusic::from_auth_token(
+                                StableOAuthToken::from_oauth_token(refreshed_token),
+                            )));
+                        }
+                        Err(e) => {
+                            log::warn!("Saved token refresh failed, removing old token: {e}");
+                            fs::remove_file(&token_path).await?;
+                        }
+                    }
                 } else {
                     fs::remove_file(&token_path).await?;
                 }
@@ -80,23 +140,11 @@ async fn finish_auth(
         }
     };
 
-    let config_path = misc::get_config_path().await?;
-    let token_path = config_path.join("token.json");
-
-    let saved_token_json = serde_json::to_vec(&token)?;
-    match fs::write(&token_path, &saved_token_json).await {
-        Ok(_) => {
-            log::info!(
-                "Successfully saved token to {path}",
-                path = token_path.display()
-            );
-        }
-        Err(e) => {
-            log::error!("Failed to save token path: {e}");
-        }
+    if let Err(e) = save_token(&token).await {
+        log::error!("Failed to save token path: {e}");
     }
 
-    let yt = YtMusic::from_auth_token(token);
+    let yt = YtMusic::from_auth_token(StableOAuthToken::from_oauth_token(token));
 
     Ok(AuthState::LoggedIn(yt))
 }
