@@ -3,7 +3,7 @@ mod auth;
 use anyhow::{Context as _, Error, Result, anyhow};
 use rust_i18n::t;
 use serde_json::{Value, json};
-use std::{borrow::Cow, env};
+use std::{borrow::Cow, collections::HashMap, env, sync::OnceLock};
 
 use eframe::{App, HardwareAcceleration, NativeOptions};
 use egui::{
@@ -163,6 +163,7 @@ enum AsyncView<T> {
 pub struct Application {
     auth: ApplicationAuth,
     library: ApplicationLibrary,
+    thumbnail_state: HashMap<String, Bind<Vec<u8>, Error>>,
 }
 
 impl ApplicationAuth {
@@ -217,6 +218,7 @@ impl Application {
                 selected_playlist_id: None,
                 selected_home_params: None,
             },
+            thumbnail_state: HashMap::new(),
         }
     }
 
@@ -771,16 +773,37 @@ impl Application {
     }
 
     fn show_thumbnail(&mut self, ui: &mut Ui, thumbnails: &[Thumbnail], size: Vec2) {
-        let Some(url) = preferred_thumbnail_url(thumbnails) else {
+        let Some(url) = preferred_thumbnail_url(thumbnails).map(ToOwned::to_owned) else {
             show_thumbnail_placeholder(ui, size, "No image");
             return;
         };
 
-        ui.add(
-            Image::from_uri(url)
-                .fit_to_exact_size(size)
-                .corner_radius(10),
-        );
+        let state = self
+            .thumbnail_state
+            .entry(url.clone())
+            .or_insert_with(|| Bind::new(true));
+
+        if matches!(state.state(), StateWithData::Idle) {
+            state.request(download_thumbnail(url.clone()));
+        }
+
+        match clone_async_state(state.state()) {
+            AsyncView::Idle | AsyncView::Pending => {
+                ui.ctx().request_repaint();
+                show_thumbnail_placeholder(ui, size, "Loading");
+            }
+            AsyncView::Finished(bytes) => {
+                ui.add(
+                    Image::from_bytes(format!("bytes://thumbnail/{url}"), bytes)
+                        .fit_to_exact_size(size)
+                        .corner_radius(10),
+                );
+            }
+            AsyncView::Failed(error) => {
+                log::warn!("Thumbnail load failed for {url}: {error}");
+                show_thumbnail_placeholder(ui, size, "Image error");
+            }
+        }
     }
 }
 
@@ -1047,6 +1070,35 @@ async fn load_playlist_snapshot(
         .context("failed to load playlist tracks")?;
 
     Ok(PlaylistSnapshot { details, tracks })
+}
+
+fn thumbnail_http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+                 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+            )
+            .build()
+            .expect("thumbnail http client")
+    })
+}
+
+async fn download_thumbnail(url: String) -> Result<Vec<u8>> {
+    let response = thumbnail_http_client()
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("failed to request thumbnail: {url}"))?
+        .error_for_status()
+        .with_context(|| format!("thumbnail request failed: {url}"))?;
+
+    Ok(response
+        .bytes()
+        .await
+        .with_context(|| format!("failed to read thumbnail bytes: {url}"))?
+        .to_vec())
 }
 
 fn parse_home_snapshot(root: &Value) -> HomeSnapshot {
