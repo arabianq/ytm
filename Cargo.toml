@@ -31,7 +31,7 @@ clap = { version = "4.5.60", default-features = false, features = [
 rust-i18n = "3.1.5"
 dotenv = "0.15.0"
 dirs = "6.0.0"
-tokio = { version = "1.50.0", features = ["full"] }
+tokio = { version = "1.52.1", features = ["full"] }
 derivative = "2.2.0"
 
 egui = { version = "0.33.3", default-features = false, features = [
@@ -44,5 +44,6 @@ eframe = { version = "0.33.3", default-features = false, features = [
     "wayland",
 ] }
 egui-async = "0.3.4"
+egui_extras = { version = "0.33.3", features = ["all_loaders"] }
 
-ytmapi-rs = "0.3.1"
+ytmapi-rs = { git = "https://github.com/nick42d/youtui.git", package = "ytmapi-rs", rev = "84cda1423232f802d6098728003a1da0baf95e90" }
