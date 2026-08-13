@@ -1,5 +1,6 @@
 use super::{
     AppAuthToken, AsyncView, GetHomeQuery, HomeSnapshot, LibrarySnapshot, PlaylistSnapshot,
+    SearchSnapshot,
 };
 use anyhow::{Context as _, Result, anyhow};
 use egui_async::StateWithData;
@@ -9,6 +10,25 @@ use ytmapi_rs::{
     common::{PlaylistID, Thumbnail, YoutubeID},
     parse::PlaylistItem,
 };
+
+pub(super) async fn load_search_results(
+    yt: YtMusic<AppAuthToken>,
+    query: String,
+) -> Result<SearchSnapshot> {
+    let songs_client = yt.clone();
+    let videos_client = yt.clone();
+    let albums_client = yt;
+    let (songs, videos, albums) = tokio::join!(
+        songs_client.search_songs(query.as_str()),
+        videos_client.search_videos(query.as_str()),
+        albums_client.search_albums(query.as_str()),
+    );
+    Ok(SearchSnapshot {
+        songs: songs.context("failed to search songs")?,
+        videos: videos.context("failed to search videos")?,
+        albums: albums.context("failed to search albums")?,
+    })
+}
 
 pub(super) async fn load_library_snapshot(
     yt: YtMusic<AppAuthToken>,
@@ -222,7 +242,7 @@ pub(super) fn clone_async_state<T: Clone>(
         StateWithData::Idle => AsyncView::Idle,
         StateWithData::Pending => AsyncView::Pending,
         StateWithData::Finished(data) => AsyncView::Finished(data.clone()),
-        StateWithData::Failed(error) => AsyncView::Failed(error.to_string()),
+        StateWithData::Failed(error) => AsyncView::Failed(format!("{error:#}")),
     }
 }
 

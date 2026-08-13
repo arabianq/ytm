@@ -2,8 +2,8 @@ use super::{
     Application, ApplicationAuth, ApplicationLibrary, AsyncView, LibrarySnapshot, LibraryTab,
     PlaylistSnapshot,
     data::{
-        clone_async_state, load_library_snapshot, load_playlist_snapshot, playlist_item_summary,
-        playlist_item_thumbnails,
+        clone_async_state, load_library_snapshot, load_playlist_snapshot, load_search_results,
+        playlist_item_summary, playlist_item_thumbnails,
     },
     fonts,
 };
@@ -55,6 +55,8 @@ impl Application {
                 selected_tab: LibraryTab::Home,
                 selected_playlist_id: None,
                 selected_home_params: None,
+                search_input: String::new(),
+                search_state: Bind::new(true),
             },
             thumbnail_state: HashMap::new(),
         }
@@ -108,6 +110,20 @@ impl Application {
         self.library.selected_tab = LibraryTab::Home;
     }
 
+    fn request_search(&mut self) {
+        let Some(yt) = self.auth.yt_client.clone() else {
+            return;
+        };
+        let query = self.library.search_input.trim().to_owned();
+        if query.is_empty() {
+            return;
+        }
+        self.library.search_state.clear();
+        self.library
+            .search_state
+            .request(load_search_results(yt, query));
+    }
+
     fn show_library(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
         if self.library.selected_playlist_id.is_none() {
             if let Some(first_playlist) = snapshot.playlists.first() {
@@ -147,6 +163,7 @@ impl Application {
         ui.horizontal_wrapped(|ui| {
             for (tab, label) in [
                 (LibraryTab::Home, "Home"),
+                (LibraryTab::Search, "Search"),
                 (LibraryTab::Overview, "Overview"),
                 (LibraryTab::Playlists, "Playlists"),
                 (LibraryTab::Songs, "Songs"),
@@ -164,6 +181,7 @@ impl Application {
                     .id_salt("home-page-scroll")
                     .show(ui, |ui| self.show_home(ui, snapshot));
             }
+            LibraryTab::Search => self.show_search(ui),
             LibraryTab::Overview => {
                 ScrollArea::vertical()
                     .id_salt("overview-page-scroll")
@@ -184,6 +202,112 @@ impl Application {
                 ScrollArea::vertical()
                     .id_salt("artists-page-scroll")
                     .show(ui, |ui| self.show_artists(ui, snapshot));
+            }
+        }
+    }
+
+    fn show_search(&mut self, ui: &mut Ui) {
+        ui.heading("Search");
+        ui.horizontal(|ui| {
+            let response = ui.add(
+                TextEdit::singleline(&mut self.library.search_input)
+                    .hint_text("Songs, artists, albums…")
+                    .desired_width(320.0),
+            );
+            if ui.button("Search").clicked()
+                || (response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+            {
+                self.request_search();
+            }
+        });
+        ui.add_space(10.0);
+        match clone_async_state(self.library.search_state.state()) {
+            AsyncView::Idle => {
+                ui.label("Enter a query to search YouTube Music.");
+            }
+            AsyncView::Pending => {
+                ui.spinner();
+                ui.label("Searching...");
+            }
+            AsyncView::Failed(error) => {
+                ui.colored_label(Color32::RED, format!("Search failed: {error}"));
+            }
+            AsyncView::Finished(results) => {
+                ui.label(format!(
+                    "{} songs, {} videos, {} albums",
+                    results.songs.len(),
+                    results.videos.len(),
+                    results.albums.len()
+                ));
+                ScrollArea::vertical()
+                    .id_salt("search-results-scroll")
+                    .show(ui, |ui| {
+                        if !results.songs.is_empty() {
+                            ui.heading("Songs");
+                            for song in results.songs.iter().take(20) {
+                                ui.horizontal(|ui| {
+                                    self.show_thumbnail(ui, &song.thumbnails, vec2(64.0, 64.0));
+                                    ui.vertical(|ui| {
+                                        ui.label(&song.title);
+                                        ui.small(format!("{} • {}", song.artist, song.plays));
+                                        ui.small(
+                                            song.album
+                                                .as_ref()
+                                                .map(|album| album.name.as_str())
+                                                .unwrap_or("Single"),
+                                        );
+                                    });
+                                });
+                                ui.add_space(6.0);
+                            }
+                        }
+                        if !results.videos.is_empty() {
+                            ui.heading("Videos");
+                            for video in results.videos.iter().take(10) {
+                                match video {
+                                    ytmapi_rs::parse::SearchResultVideo::Video {
+                                        title,
+                                        channel_name,
+                                        views,
+                                        thumbnails,
+                                        ..
+                                    } => ui.horizontal(|ui| {
+                                        self.show_thumbnail(ui, thumbnails, vec2(96.0, 64.0));
+                                        ui.vertical(|ui| {
+                                            ui.label(title);
+                                            ui.small(format!("{} • {}", channel_name, views));
+                                        });
+                                    }),
+                                    ytmapi_rs::parse::SearchResultVideo::VideoEpisode {
+                                        title,
+                                        channel_name,
+                                        thumbnails,
+                                        ..
+                                    } => ui.horizontal(|ui| {
+                                        self.show_thumbnail(ui, thumbnails, vec2(96.0, 64.0));
+                                        ui.vertical(|ui| {
+                                            ui.label(title);
+                                            ui.small(channel_name);
+                                        });
+                                    }),
+                                };
+                                ui.add_space(6.0);
+                            }
+                        }
+                        if !results.albums.is_empty() {
+                            ui.heading("Albums");
+                            for album in results.albums.iter().take(12) {
+                                ui.horizontal(|ui| {
+                                    self.show_thumbnail(ui, &album.thumbnails, vec2(64.0, 64.0));
+                                    ui.vertical(|ui| {
+                                        ui.label(&album.title);
+                                        ui.small(format!("{} • {}", album.artist, album.year));
+                                    });
+                                });
+                                ui.add_space(6.0);
+                            }
+                        }
+                    });
             }
         }
     }

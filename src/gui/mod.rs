@@ -14,7 +14,8 @@ use ytmapi_rs::{
     YtMusic,
     parse::{
         GetPlaylistDetails, LibraryArtist, LibraryPlaylist, MoodPlaylistCategory, ParseFrom,
-        PlaylistItem, ProcessedResult, SearchResultAlbum, TableListSong,
+        PlaylistItem, ProcessedResult, SearchResultAlbum, SearchResultSong, SearchResultVideo,
+        TableListSong,
     },
     query::{PostMethod, PostQuery, Query},
 };
@@ -40,6 +41,7 @@ struct ApplicationAuth {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LibraryTab {
     Home,
+    Search,
     Overview,
     Playlists,
     Songs,
@@ -100,12 +102,21 @@ struct PlaylistSnapshot {
     tracks: Vec<PlaylistItem>,
 }
 
+#[derive(Clone)]
+struct SearchSnapshot {
+    songs: Vec<SearchResultSong>,
+    videos: Vec<SearchResultVideo>,
+    albums: Vec<SearchResultAlbum>,
+}
+
 struct ApplicationLibrary {
     current_state: Bind<LibrarySnapshot, anyhow::Error>,
     playlist_state: Bind<PlaylistSnapshot, anyhow::Error>,
     selected_tab: LibraryTab,
     selected_playlist_id: Option<String>,
     selected_home_params: Option<String>,
+    search_input: String,
+    search_state: Bind<SearchSnapshot, anyhow::Error>,
 }
 
 #[derive(Clone, Debug)]
