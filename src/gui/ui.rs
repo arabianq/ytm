@@ -1,0 +1,720 @@
+use super::{
+    Application, ApplicationAuth, ApplicationLibrary, AsyncView, LibrarySnapshot, LibraryTab,
+    PlaylistSnapshot,
+    data::{
+        clone_async_state, load_library_snapshot, load_playlist_snapshot, playlist_item_summary,
+        playlist_item_thumbnails,
+    },
+    fonts,
+};
+use anyhow::{Result, anyhow};
+use eframe::{App, HardwareAcceleration, NativeOptions};
+use egui::{
+    Align2, Area, Button, CentralPanel, Color32, Context, Frame, Id, RichText, ScrollArea,
+    TextEdit, Ui, Vec2, ViewportBuilder, vec2,
+};
+use egui_async::{Bind, StateWithData};
+use rust_i18n::t;
+use std::{collections::HashMap, env};
+use ytmapi_rs::common::YoutubeID;
+
+impl Application {
+    pub(super) fn new(ctx: &Context) -> Self {
+        ctx.set_zoom_factor(1.5);
+        fonts::configure_fonts(ctx);
+        egui_extras::install_image_loaders(ctx);
+
+        let client_id = env::var("CLIENT_ID").ok().map(|s| s.trim().to_string());
+        let client_secret = env::var("CLIENT_SECRET").ok().map(|s| s.trim().to_string());
+        let cookie = env::var("YTM_COOKIE")
+            .ok()
+            .or_else(|| env::var("YTM_COOKIES").ok())
+            .map(|s| s.trim().to_string());
+        let cookie_file = env::var("YTM_COOKIE_FILE")
+            .ok()
+            .or_else(|| env::var("YTM_COOKIES_FILE").ok())
+            .map(|s| s.trim().to_string());
+
+        Self {
+            auth: ApplicationAuth {
+                client_id,
+                client_secret,
+                cookie,
+                cookie_file,
+                client_id_input: String::new(),
+                client_secret_input: String::new(),
+                cookie_input: String::new(),
+                cookie_file_input: String::new(),
+                current_state: Bind::new(true),
+                previous_state: None,
+                yt_client: None,
+            },
+            library: ApplicationLibrary {
+                current_state: Bind::new(true),
+                playlist_state: Bind::new(true),
+                selected_tab: LibraryTab::Home,
+                selected_playlist_id: None,
+                selected_home_params: None,
+            },
+            thumbnail_state: HashMap::new(),
+        }
+    }
+
+    fn ensure_library_requested(&mut self) {
+        let Some(yt) = self.auth.yt_client.clone() else {
+            return;
+        };
+
+        if matches!(self.library.current_state.state(), StateWithData::Idle) {
+            self.library.current_state.request(load_library_snapshot(
+                yt,
+                self.library.selected_home_params.clone(),
+            ));
+        }
+    }
+
+    fn ensure_playlist_requested(&mut self) {
+        let Some(yt) = self.auth.yt_client.clone() else {
+            return;
+        };
+        let Some(playlist_id) = self.library.selected_playlist_id.clone() else {
+            return;
+        };
+
+        if matches!(self.library.playlist_state.state(), StateWithData::Idle) {
+            self.library
+                .playlist_state
+                .request(load_playlist_snapshot(yt, playlist_id));
+        }
+    }
+
+    fn select_playlist(&mut self, playlist_id: String) {
+        if self.library.selected_playlist_id.as_deref() == Some(playlist_id.as_str()) {
+            return;
+        }
+
+        self.library.selected_playlist_id = Some(playlist_id);
+        self.library.playlist_state.clear();
+    }
+
+    fn reload_library(&mut self) {
+        self.library.current_state.clear();
+        self.library.playlist_state.clear();
+    }
+
+    fn set_home_filter(&mut self, params: Option<String>) {
+        self.library.selected_home_params = params;
+        self.reload_library();
+        self.library.selected_tab = LibraryTab::Home;
+    }
+
+    fn show_library(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
+        if self.library.selected_playlist_id.is_none() {
+            if let Some(first_playlist) = snapshot.playlists.first() {
+                self.select_playlist(first_playlist.playlist_id.get_raw().to_owned());
+            } else if let Some(first_playlist) = snapshot
+                .recommended_playlists
+                .iter()
+                .flat_map(|category| category.playlists.iter())
+                .next()
+            {
+                self.select_playlist(first_playlist.playlist_id.get_raw().to_owned());
+            }
+        }
+
+        ui.horizontal(|ui| {
+            ui.heading("YouTube Music");
+            if ui.button("Reload").clicked() {
+                self.reload_library();
+            }
+        });
+
+        ui.label(format!(
+            "Loaded {} playlists, {} songs, {} albums and {} artists.",
+            snapshot.playlists.len(),
+            snapshot.songs.len(),
+            snapshot.albums.len(),
+            snapshot.artists.len()
+        ));
+        if !snapshot.home.sections.is_empty() {
+            ui.label(format!("Home sections: {}", snapshot.home.sections.len()));
+        }
+        for warning in &snapshot.warnings {
+            ui.colored_label(Color32::YELLOW, warning);
+        }
+
+        ui.add_space(10.0);
+        ui.horizontal_wrapped(|ui| {
+            for (tab, label) in [
+                (LibraryTab::Home, "Home"),
+                (LibraryTab::Overview, "Overview"),
+                (LibraryTab::Playlists, "Playlists"),
+                (LibraryTab::Songs, "Songs"),
+                (LibraryTab::Albums, "Albums"),
+                (LibraryTab::Artists, "Artists"),
+            ] {
+                ui.selectable_value(&mut self.library.selected_tab, tab, label);
+            }
+        });
+        ui.add_space(8.0);
+
+        match self.library.selected_tab {
+            LibraryTab::Home => {
+                ScrollArea::vertical()
+                    .id_salt("home-page-scroll")
+                    .show(ui, |ui| self.show_home(ui, snapshot));
+            }
+            LibraryTab::Overview => {
+                ScrollArea::vertical()
+                    .id_salt("overview-page-scroll")
+                    .show(ui, |ui| self.show_overview(ui, snapshot));
+            }
+            LibraryTab::Playlists => self.show_playlists(ui, snapshot),
+            LibraryTab::Songs => {
+                ScrollArea::vertical()
+                    .id_salt("songs-page-scroll")
+                    .show(ui, |ui| self.show_songs(ui, snapshot));
+            }
+            LibraryTab::Albums => {
+                ScrollArea::vertical()
+                    .id_salt("albums-page-scroll")
+                    .show(ui, |ui| self.show_albums(ui, snapshot));
+            }
+            LibraryTab::Artists => {
+                ScrollArea::vertical()
+                    .id_salt("artists-page-scroll")
+                    .show(ui, |ui| self.show_artists(ui, snapshot));
+            }
+        }
+    }
+
+    fn show_home(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
+        let home = &snapshot.home;
+
+        if !home.background.is_empty() {
+            ui.group(|ui| {
+                ui.heading("Home");
+                ui.add_space(6.0);
+                self.show_thumbnail(ui, &home.background, vec2(720.0, 180.0));
+            });
+            ui.add_space(10.0);
+        } else {
+            ui.heading("Home");
+            ui.add_space(6.0);
+        }
+
+        if !home.chips.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for chip in &home.chips {
+                    let response = ui.add(Button::new(&chip.title).selected(chip.selected));
+                    if response.clicked() {
+                        if chip.selected {
+                            self.set_home_filter(None);
+                        } else {
+                            self.set_home_filter(chip.params.clone());
+                        }
+                    }
+                }
+            });
+            ui.add_space(10.0);
+        }
+
+        if let Some(banner) = &home.banner {
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    self.show_thumbnail(ui, &banner.thumbnails, vec2(220.0, 96.0));
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(&banner.title).strong());
+                        if !banner.subtitle.is_empty() {
+                            ui.small(&banner.subtitle);
+                        }
+                    });
+                });
+            });
+            ui.add_space(10.0);
+        }
+
+        if home.sections.is_empty() {
+            ui.label("No home recommendations available.");
+            return;
+        }
+
+        for section in &home.sections {
+            ui.group(|ui| {
+                ui.heading(&section.title);
+                ui.add_space(6.0);
+
+                ScrollArea::horizontal()
+                    .id_salt(("home-section-scroll", &section.title))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for item in &section.items {
+                                let is_playlist =
+                                    item.page_type.as_deref() == Some("MUSIC_PAGE_TYPE_PLAYLIST");
+                                let is_selected = is_playlist
+                                    && self.library.selected_playlist_id.as_deref()
+                                        == item.browse_id.as_deref();
+                                let response = self.show_media_card(
+                                    ui,
+                                    (
+                                        "home-item",
+                                        item.browse_id.as_deref().unwrap_or(item.title.as_str()),
+                                    ),
+                                    &item.thumbnails,
+                                    &item.title,
+                                    &item.subtitle,
+                                    is_selected,
+                                    vec2(160.0, 160.0),
+                                );
+
+                                if is_playlist
+                                    && response.clicked()
+                                    && let Some(browse_id) = &item.browse_id
+                                {
+                                    self.select_playlist(browse_id.clone());
+                                    self.library.selected_tab = LibraryTab::Playlists;
+                                }
+
+                                ui.add_space(8.0);
+                            }
+                        });
+                    });
+            });
+            ui.add_space(10.0);
+        }
+    }
+
+    fn show_overview(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
+        ui.group(|ui| {
+            ui.heading("Quick stats");
+            ui.label(format!("Playlists: {}", snapshot.playlists.len()));
+            ui.label(format!("Songs: {}", snapshot.songs.len()));
+            ui.label(format!("Albums: {}", snapshot.albums.len()));
+            ui.label(format!("Artists: {}", snapshot.artists.len()));
+            ui.label(format!("Home sections: {}", snapshot.home.sections.len()));
+        });
+
+        ui.add_space(10.0);
+        ui.group(|ui| {
+            ui.heading("First playlists");
+            if snapshot.playlists.is_empty() {
+                ui.label("No playlists found.");
+            }
+
+            ScrollArea::horizontal()
+                .id_salt("overview-playlists-scroll")
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for playlist in snapshot.playlists.iter().take(8) {
+                            let selected = self.library.selected_playlist_id.as_deref()
+                                == Some(playlist.playlist_id.get_raw());
+                            let response = self.show_media_card(
+                                ui,
+                                ("overview-playlist", playlist.playlist_id.get_raw()),
+                                &playlist.thumbnails,
+                                &playlist.title,
+                                &format!("{} | {}", playlist.author, playlist.tracks),
+                                selected,
+                                vec2(144.0, 144.0),
+                            );
+                            if response.clicked() {
+                                self.select_playlist(playlist.playlist_id.get_raw().to_owned());
+                                self.library.selected_tab = LibraryTab::Playlists;
+                            }
+                        }
+                    });
+                });
+        });
+    }
+
+    fn show_playlists(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
+        self.ensure_playlist_requested();
+
+        ui.columns(2, |columns| {
+            columns[0].group(|ui| {
+                ui.heading("Playlists");
+                ui.add_space(6.0);
+                ScrollArea::vertical()
+                    .id_salt("playlists-list-scroll")
+                    .show(ui, |ui| {
+                        if snapshot.playlists.is_empty()
+                            && snapshot.recommended_playlists.is_empty()
+                        {
+                            ui.label("No playlists available.");
+                        }
+
+                        for playlist in &snapshot.playlists {
+                            let selected = self.library.selected_playlist_id.as_deref()
+                                == Some(playlist.playlist_id.get_raw());
+                            let response = self.show_media_card(
+                                ui,
+                                ("library-playlist", playlist.playlist_id.get_raw()),
+                                &playlist.thumbnails,
+                                &playlist.title,
+                                &format!("{} | {}", playlist.author, playlist.tracks),
+                                selected,
+                                vec2(112.0, 112.0),
+                            );
+                            if response.clicked() {
+                                self.select_playlist(playlist.playlist_id.get_raw().to_owned());
+                            }
+                            ui.small(format!("id: {}", playlist.playlist_id.get_raw()));
+                            ui.add_space(8.0);
+                        }
+
+                        if !snapshot.recommended_playlists.is_empty() {
+                            ui.separator();
+                            ui.heading("Recommended");
+                            ui.add_space(6.0);
+
+                            for category in &snapshot.recommended_playlists {
+                                ui.label(RichText::new(&category.category_name).strong());
+                                ui.add_space(4.0);
+                                ScrollArea::horizontal()
+                                    .id_salt((
+                                        "recommended-category-scroll",
+                                        &category.category_name,
+                                    ))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            for playlist in &category.playlists {
+                                                let selected =
+                                                    self.library.selected_playlist_id.as_deref()
+                                                        == Some(playlist.playlist_id.get_raw());
+                                                let response = self.show_media_card(
+                                                    ui,
+                                                    (
+                                                        "recommended-playlist",
+                                                        playlist.playlist_id.get_raw(),
+                                                    ),
+                                                    &playlist.thumbnails,
+                                                    &playlist.title,
+                                                    &playlist.author,
+                                                    selected,
+                                                    vec2(112.0, 112.0),
+                                                );
+                                                if response.clicked() {
+                                                    self.select_playlist(
+                                                        playlist.playlist_id.get_raw().to_owned(),
+                                                    );
+                                                }
+                                                ui.add_space(8.0);
+                                            }
+                                        });
+                                    });
+                                ui.add_space(6.0);
+                            }
+                        }
+                    });
+            });
+
+            columns[1].group(|ui| {
+                ui.heading("Playlist details");
+                ui.add_space(6.0);
+
+                match clone_async_state(self.library.playlist_state.state()) {
+                    AsyncView::Idle => self.show_idle_playlist_state(ui),
+                    AsyncView::Pending => {
+                        ui.spinner();
+                        ui.label("Loading playlist details...");
+                    }
+                    AsyncView::Finished(playlist) => self.show_playlist_details(ui, &playlist),
+                    AsyncView::Failed(error) => {
+                        ui.colored_label(Color32::RED, format!("Failed to load playlist: {error}"));
+                        if ui.button("Retry playlist").clicked() {
+                            self.library.playlist_state.clear();
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    fn show_idle_playlist_state(&self, ui: &mut Ui) {
+        if self.library.selected_playlist_id.is_some() {
+            ui.label("Preparing playlist request...");
+        } else {
+            ui.label("Select a playlist on the left.");
+        }
+    }
+
+    fn show_playlist_details(&mut self, ui: &mut Ui, playlist: &PlaylistSnapshot) {
+        ui.horizontal(|ui| {
+            self.show_thumbnail(ui, &playlist.details.thumbnails, vec2(128.0, 128.0));
+            ui.add_space(10.0);
+            ui.vertical(|ui| {
+                ui.heading(&playlist.details.title);
+                ui.label(format!("Author: {}", playlist.details.author));
+                ui.label(format!("Tracks: {}", playlist.details.track_count_text));
+                ui.label(format!("Duration: {}", playlist.details.duration));
+            });
+        });
+
+        if let Some(description) = &playlist.details.description
+            && !description.trim().is_empty()
+        {
+            ui.add_space(8.0);
+            ui.label(description);
+        }
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.label(format!("Items loaded: {}", playlist.tracks.len()));
+        ui.add_space(6.0);
+
+        ScrollArea::vertical()
+            .id_salt("playlist-details-tracks-scroll")
+            .show(ui, |ui| {
+                for (index, item) in playlist.tracks.iter().enumerate() {
+                    let (title, subtitle) = playlist_item_summary(item);
+                    ui.push_id(("playlist-track", index, &title), |ui| {
+                        ui.horizontal(|ui| {
+                            self.show_thumbnail(
+                                ui,
+                                playlist_item_thumbnails(item),
+                                vec2(52.0, 52.0),
+                            );
+                            ui.add_space(8.0);
+                            ui.vertical(|ui| {
+                                ui.label(&title);
+                                ui.small(&subtitle);
+                            });
+                        });
+                        ui.add_space(6.0);
+                    });
+                }
+            });
+    }
+
+    fn show_songs(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
+        ui.heading("Songs");
+        ui.add_space(6.0);
+
+        ScrollArea::vertical()
+            .id_salt("songs-scroll")
+            .show(ui, |ui| {
+                if snapshot.songs.is_empty() {
+                    ui.label("No songs available.");
+                }
+                for song in snapshot.songs.iter().take(100) {
+                    let artists = if song.artists.is_empty() {
+                        "Unknown artist".to_string()
+                    } else {
+                        song.artists
+                            .iter()
+                            .map(|artist| artist.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+
+                    ui.push_id(("song-row", &song.title, &song.video_id), |ui| {
+                        ui.horizontal(|ui| {
+                            self.show_thumbnail(ui, &song.thumbnails, vec2(56.0, 56.0));
+                            ui.add_space(8.0);
+                            ui.vertical(|ui| {
+                                ui.label(&song.title);
+                                ui.small(format!(
+                                    "{} | {} | {}",
+                                    artists, song.album.name, song.duration
+                                ));
+                            });
+                        });
+                        ui.add_space(6.0);
+                    });
+                }
+            });
+    }
+
+    fn show_albums(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
+        ui.heading("Albums");
+        ui.add_space(6.0);
+
+        ScrollArea::vertical()
+            .id_salt("albums-scroll")
+            .show(ui, |ui| {
+                if snapshot.albums.is_empty() {
+                    ui.label("No albums available.");
+                }
+                for album in &snapshot.albums {
+                    ui.push_id(("album-row", &album.title, &album.album_id), |ui| {
+                        ui.horizontal(|ui| {
+                            self.show_thumbnail(ui, &album.thumbnails, vec2(68.0, 68.0));
+                            ui.add_space(8.0);
+                            ui.vertical(|ui| {
+                                ui.label(&album.title);
+                                ui.small(format!(
+                                    "{} | {} | {:?}",
+                                    album.artist, album.year, album.album_type
+                                ));
+                            });
+                        });
+                        ui.add_space(6.0);
+                    });
+                }
+            });
+    }
+
+    fn show_artists(&self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
+        ui.heading("Artists");
+        ui.add_space(6.0);
+
+        ScrollArea::vertical()
+            .id_salt("artists-scroll")
+            .show(ui, |ui| {
+                if snapshot.artists.is_empty() {
+                    ui.label("No artists available.");
+                }
+                for artist in &snapshot.artists {
+                    ui.push_id(("artist-row", &artist.artist, &artist.byline), |ui| {
+                        ui.label(&artist.artist);
+                        ui.small(&artist.byline);
+                        ui.add_space(6.0);
+                    });
+                }
+            });
+    }
+
+    fn show_auth_setup_form(&mut self, ctx: &Context) {
+        Area::new(Id::new("auth_form"))
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                Frame::group(ui.style())
+                    .corner_radius(8.0)
+                    .inner_margin(16.0)
+                    .show(ui, |ui| {
+                        ui.heading("Authentication");
+                        ui.add_space(8.0);
+                        ui.label("Cookie string");
+                        ui.add(
+                            TextEdit::multiline(&mut self.auth.cookie_input)
+                                .desired_width(420.0)
+                                .desired_rows(4),
+                        );
+
+                        ui.label("Cookie file path");
+                        ui.add(TextEdit::singleline(&mut self.auth.cookie_file_input));
+
+                        if ui.button("Use cookie").clicked() {
+                            self.auth.cookie = Some(self.auth.cookie_input.clone());
+                            self.auth.cookie_file = Some(self.auth.cookie_file_input.clone());
+                            self.auth.client_id = None;
+                            self.auth.client_secret = None;
+                            self.auth.current_state.clear();
+                            self.auth.previous_state.take();
+                        }
+
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(12.0);
+                        ui.label("Client ID");
+                        ui.add(TextEdit::singleline(&mut self.auth.client_id_input));
+
+                        ui.label("Client Secret");
+                        ui.add(
+                            TextEdit::singleline(&mut self.auth.client_secret_input).password(true),
+                        );
+
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(16.0 - ui.spacing().item_spacing.y);
+
+                            if ui.button(t!("auth.retry_button")).clicked() {
+                                self.auth.client_id = Some(self.auth.client_id_input.clone());
+                                self.auth.client_secret =
+                                    Some(self.auth.client_secret_input.clone());
+                                if !self.auth.cookie_input.trim().is_empty() {
+                                    self.auth.cookie = Some(self.auth.cookie_input.clone());
+                                }
+                                if !self.auth.cookie_file_input.trim().is_empty() {
+                                    self.auth.cookie_file =
+                                        Some(self.auth.cookie_file_input.clone());
+                                }
+
+                                self.auth.client_id_input.clear();
+                                self.auth.client_secret_input.clear();
+                                self.auth.current_state.clear();
+                                self.auth.previous_state.take();
+                            }
+                        });
+                    });
+            });
+    }
+}
+
+impl App for Application {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.plugin_or_default::<egui_async::EguiAsyncPlugin>();
+
+        CentralPanel::default().show(ctx, |ui| {
+            if self.auth.yt_client.is_none() {
+                if self.auth.has_any_auth_source() {
+                    self.process_auth(ui);
+                } else {
+                    self.show_auth_setup_form(ctx);
+                }
+
+                ctx.request_repaint_after_secs(0.1);
+                return;
+            }
+
+            self.ensure_library_requested();
+
+            match clone_async_state(self.library.current_state.state()) {
+                AsyncView::Idle => {
+                    ui.spinner();
+                    ui.label("Preparing library request...");
+                }
+                AsyncView::Pending => {
+                    Area::new(Id::new("library_loading"))
+                        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                        .show(ctx, |ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.heading(t!("auth.success_title"));
+                                ui.label(t!("auth.welcome"));
+                                ui.add_space(12.0);
+                                ui.spinner();
+                                ui.label("Loading your YouTube Music home and library...");
+                            });
+                        });
+                }
+                AsyncView::Finished(snapshot) => {
+                    self.show_library(ui, &snapshot);
+                }
+                AsyncView::Failed(error) => {
+                    ui.colored_label(
+                        Color32::RED,
+                        format!("Failed to load library data: {error}"),
+                    );
+                    if ui.button("Retry library").clicked() {
+                        self.reload_library();
+                    }
+                }
+            }
+        });
+    }
+}
+
+pub(super) fn run() -> Result<()> {
+    let options = NativeOptions {
+        vsync: true,
+        centered: true,
+        hardware_acceleration: HardwareAcceleration::Preferred,
+        viewport: ViewportBuilder::default()
+            .with_app_id("ytm")
+            .with_inner_size(vec2(1200.0, 800.0))
+            .with_min_inner_size(vec2(800.0, 600.0)),
+        ..Default::default()
+    };
+
+    match eframe::run_native(
+        "Youtube Music",
+        options,
+        Box::new(|cc| Ok(Box::new(Application::new(&cc.egui_ctx)))),
+    ) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            log::error!("{error}");
+            Err(anyhow!("{error}"))
+        }
+    }
+}

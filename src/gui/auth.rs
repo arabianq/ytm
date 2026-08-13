@@ -8,17 +8,15 @@ use anyhow::{Result, anyhow};
 use derivative::Derivative;
 use rust_i18n::t;
 use serde_json::Value;
-use std::collections::HashSet;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::{fs, time::sleep};
 
 use ytmapi_rs::{
     Client, YtMusic,
-    auth::{
-        AuthToken, BrowserToken, LoggedIn, OAuthToken, RawResult, oauth::OAuthDeviceCode,
-    },
+    auth::{AuthToken, BrowserToken, LoggedIn, OAuthToken, RawResult, oauth::OAuthDeviceCode},
     parse::ProcessedResult,
 };
 
@@ -154,7 +152,10 @@ async fn save_token(token: &OAuthToken) -> Result<()> {
 }
 
 fn config_cookie_candidates(config_path: &Path) -> [PathBuf; 2] {
-    [config_path.join("cookie.txt"), config_path.join("cookies.txt")]
+    [
+        config_path.join("cookie.txt"),
+        config_path.join("cookies.txt"),
+    ]
 }
 
 fn normalize_cookie_input(raw: &str) -> Result<String> {
@@ -163,12 +164,11 @@ fn normalize_cookie_input(raw: &str) -> Result<String> {
         return Err(anyhow!("Cookie input is empty"));
     }
 
-    if trimmed.starts_with('[') || trimmed.starts_with('{') {
-        if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
-            if let Some(header) = cookie_header_from_json(&json) {
-                return Ok(header);
-            }
-        }
+    if (trimmed.starts_with('[') || trimmed.starts_with('{'))
+        && let Ok(json) = serde_json::from_str::<Value>(trimmed)
+        && let Some(header) = cookie_header_from_json(&json)
+    {
+        return Ok(header);
     }
 
     if trimmed.contains('\t') || trimmed.contains("# Netscape") {
@@ -225,6 +225,7 @@ fn cookie_header_from_json(json: &Value) -> Option<String> {
 
 fn parse_netscape_cookie_line(line: &str) -> Option<String> {
     let line = line.trim();
+    let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
     if line.is_empty() || line.starts_with('#') {
         return None;
     }
@@ -243,10 +244,17 @@ fn parse_netscape_cookie_line(line: &str) -> Option<String> {
     }
 }
 
-async fn try_cookie_auth(config: &AuthBootstrap, config_path: &Path) -> Result<Option<AppAuthToken>> {
+async fn try_cookie_auth(
+    config: &AuthBootstrap,
+    config_path: &Path,
+) -> Result<Option<AppAuthToken>> {
     let mut errors = Vec::new();
 
-    if let Some(cookie) = config.cookie.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(cookie) = config
+        .cookie
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         match AppAuthToken::from_cookie_str(cookie).await {
             Ok(token) => return Ok(Some(token)),
             Err(error) => errors.push(format!("cookie text: {error}")),
@@ -378,10 +386,8 @@ async fn extract_firefox_cookie_header(profile_path: &Path) -> Result<Option<Str
 
     let sqlite_path = sqlite_path.clone();
     let header = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
-        let temp_path = std::env::temp_dir().join(format!(
-            "ytm-firefox-cookies-{}.sqlite",
-            std::process::id()
-        ));
+        let temp_path =
+            std::env::temp_dir().join(format!("ytm-firefox-cookies-{}.sqlite", std::process::id()));
         std::fs::copy(&sqlite_path, &temp_path)?;
 
         let result = (|| -> Result<Option<String>> {
@@ -576,10 +582,20 @@ impl Application {
                     code,
                     url: _,
                 }) => {
+                    let (Some(client_id), Some(client_secret)) =
+                        (self.auth.client_id.clone(), self.auth.client_secret.clone())
+                    else {
+                        self.auth.previous_state.take();
+                        self.auth
+                            .current_state
+                            .request(async { Err(anyhow!("OAuth configuration is incomplete")) });
+                        return;
+                    };
+
                     self.auth.current_state.request(finish_auth(
                         client.clone(),
-                        self.auth.client_id.clone().unwrap(),
-                        self.auth.client_secret.clone().unwrap(),
+                        client_id,
+                        client_secret,
                         code.clone(),
                     ));
                 }
@@ -609,5 +625,34 @@ impl Application {
                 ui.colored_label(Color32::RED, format!("{}{}", t!("auth.error_prefix"), e));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_cookie_input;
+
+    #[test]
+    fn normalizes_netscape_cookie_file() {
+        let cookies = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tvalue";
+
+        assert_eq!(normalize_cookie_input(cookies).unwrap(), "SID=value");
+    }
+
+    #[test]
+    fn retains_httponly_netscape_cookie() {
+        let cookies = "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tvalue";
+
+        assert_eq!(normalize_cookie_input(cookies).unwrap(), "SAPISID=value");
+    }
+
+    #[test]
+    fn normalizes_browser_json_export() {
+        let cookies = r#"[{"name": "SID", "value": "one"}, {"name": "HSID", "value": "two"}]"#;
+
+        assert_eq!(
+            normalize_cookie_input(cookies).unwrap(),
+            "SID=one; HSID=two"
+        );
     }
 }
