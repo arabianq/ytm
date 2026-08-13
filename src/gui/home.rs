@@ -22,16 +22,10 @@ pub(super) fn parse_home_snapshot(root: &Value) -> HomeSnapshot {
         .and_then(Value::as_array)
         .map(|chips| chips.iter().filter_map(parse_home_chip).collect())
         .unwrap_or_default();
-    let background = thumbnails_at(
-        root,
-        "/background/musicThumbnailRenderer/thumbnail/thumbnails",
-    );
-
     HomeSnapshot {
         chips,
         sections,
         banner,
-        background,
     }
 }
 

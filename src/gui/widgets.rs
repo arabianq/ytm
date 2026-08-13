@@ -2,7 +2,7 @@ use super::{
     Application, AsyncView,
     data::{clone_async_state, download_thumbnail, preferred_thumbnail_url},
 };
-use egui::{Color32, Frame, Image, RichText, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, Direction, Frame, Image, Layout, RichText, Sense, Stroke, Ui, Vec2};
 use egui_async::{Bind, StateWithData};
 use ytmapi_rs::common::Thumbnail;
 
@@ -74,10 +74,16 @@ impl Application {
                 show_thumbnail_placeholder(ui, size, "Loading");
             }
             AsyncView::Finished(bytes) => {
-                ui.add(
-                    Image::from_bytes(format!("bytes://thumbnail/{url}"), bytes)
-                        .fit_to_exact_size(size)
-                        .corner_radius(10),
+                ui.allocate_ui_with_layout(
+                    size,
+                    Layout::centered_and_justified(Direction::TopDown),
+                    |ui| {
+                        ui.add(
+                            Image::from_bytes(format!("bytes://thumbnail/{url}"), bytes)
+                                .fit_to_exact_size(size)
+                                .corner_radius(10),
+                        );
+                    },
                 );
             }
             AsyncView::Failed(error) => {

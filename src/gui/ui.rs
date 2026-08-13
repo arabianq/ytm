@@ -191,17 +191,8 @@ impl Application {
     fn show_home(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
         let home = &snapshot.home;
 
-        if !home.background.is_empty() {
-            ui.group(|ui| {
-                ui.heading("Home");
-                ui.add_space(6.0);
-                self.show_thumbnail(ui, &home.background, vec2(720.0, 180.0));
-            });
-            ui.add_space(10.0);
-        } else {
-            ui.heading("Home");
-            ui.add_space(6.0);
-        }
+        ui.heading("Home");
+        ui.add_space(6.0);
 
         if !home.chips.is_empty() {
             ui.horizontal_wrapped(|ui| {

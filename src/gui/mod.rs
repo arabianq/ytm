@@ -81,7 +81,6 @@ struct HomeSnapshot {
     chips: Vec<HomeChip>,
     sections: Vec<HomeSection>,
     banner: Option<HomeBanner>,
-    background: Vec<Thumbnail>,
 }
 
 #[derive(Clone)]
