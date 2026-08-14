@@ -1,17 +1,17 @@
 use super::{
-    Application, ApplicationAuth, ApplicationLibrary, AsyncView, LibrarySnapshot, LibraryTab,
-    PlaylistSnapshot,
+    Application, ApplicationAuth, ApplicationLibrary, AsyncView, HomeItem, LibrarySnapshot,
+    LibraryTab, PlaylistSnapshot,
     data::{
-        clone_async_state, load_library_snapshot, load_playlist_snapshot, playlist_item_summary,
-        playlist_item_thumbnails,
+        clone_async_state, load_artist_profile, load_library_snapshot, load_playlist_snapshot,
+        playlist_item_summary, playlist_item_thumbnails,
     },
     fonts,
 };
 use anyhow::{Result, anyhow};
 use eframe::{App, HardwareAcceleration, NativeOptions};
 use egui::{
-    Align2, Area, Button, CentralPanel, Color32, Context, Frame, Id, RichText, ScrollArea,
-    TextEdit, Ui, Vec2, ViewportBuilder, vec2,
+    Align2, Area, Button, CentralPanel, Color32, Context, Frame, Id, RichText, ScrollArea, Sense,
+    Stroke, TextEdit, Ui, Vec2, ViewportBuilder, vec2,
 };
 use egui_async::{Bind, StateWithData};
 use rust_i18n::t;
@@ -52,9 +52,11 @@ impl Application {
             library: ApplicationLibrary {
                 current_state: Bind::new(true),
                 playlist_state: Bind::new(true),
+                artist_state: Bind::new(true),
                 selected_tab: LibraryTab::Home,
                 selected_playlist_id: None,
                 selected_home_params: None,
+                selected_artist_id: None,
             },
             thumbnail_state: HashMap::new(),
         }
@@ -97,9 +99,33 @@ impl Application {
         self.library.playlist_state.clear();
     }
 
+    fn select_artist(&mut self, artist_id: String) {
+        if self.library.selected_artist_id.as_deref() == Some(artist_id.as_str()) {
+            return;
+        }
+        self.library.selected_artist_id = Some(artist_id);
+        self.library.artist_state.clear();
+        self.library.selected_tab = LibraryTab::ArtistProfile;
+    }
+
+    fn ensure_artist_requested(&mut self) {
+        let (Some(yt), Some(artist_id)) = (
+            self.auth.yt_client.clone(),
+            self.library.selected_artist_id.clone(),
+        ) else {
+            return;
+        };
+        if matches!(self.library.artist_state.state(), StateWithData::Idle) {
+            self.library
+                .artist_state
+                .request(load_artist_profile(yt, artist_id));
+        }
+    }
+
     fn reload_library(&mut self) {
         self.library.current_state.clear();
         self.library.playlist_state.clear();
+        self.library.artist_state.clear();
     }
 
     fn set_home_filter(&mut self, params: Option<String>) {
@@ -185,6 +211,7 @@ impl Application {
                     .id_salt("artists-page-scroll")
                     .show(ui, |ui| self.show_artists(ui, snapshot));
             }
+            LibraryTab::ArtistProfile => self.show_artist_profile(ui),
         }
     }
 
@@ -246,18 +273,7 @@ impl Application {
                                 let is_selected = is_playlist
                                     && self.library.selected_playlist_id.as_deref()
                                         == item.browse_id.as_deref();
-                                let response = self.show_media_card(
-                                    ui,
-                                    (
-                                        "home-item",
-                                        item.browse_id.as_deref().unwrap_or(item.title.as_str()),
-                                    ),
-                                    &item.thumbnails,
-                                    &item.title,
-                                    &item.subtitle,
-                                    is_selected,
-                                    vec2(160.0, 160.0),
-                                );
+                                let response = self.show_home_media_card(ui, item, is_selected);
 
                                 if is_playlist
                                     && response.clicked()
@@ -274,6 +290,70 @@ impl Application {
             });
             ui.add_space(10.0);
         }
+    }
+
+    fn show_home_media_card(
+        &mut self,
+        ui: &mut Ui,
+        item: &HomeItem,
+        selected: bool,
+    ) -> egui::Response {
+        let card_id = ui.make_persistent_id((
+            "home-item",
+            item.browse_id.as_deref().unwrap_or(item.title.as_str()),
+        ));
+        let fill = if selected {
+            Color32::from_rgb(28, 48, 72)
+        } else {
+            Color32::from_gray(24)
+        };
+        let stroke = if selected {
+            Stroke::new(1.0_f32, Color32::from_rgb(104, 178, 255))
+        } else {
+            Stroke::new(1.0_f32, Color32::from_gray(56))
+        };
+
+        let frame = ui
+            .push_id(card_id.with("scope"), |ui| {
+                Frame::group(ui.style())
+                    .fill(fill)
+                    .stroke(stroke)
+                    .corner_radius(12.0)
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        ui.set_width(176.0);
+                        ui.vertical(|ui| {
+                            self.show_thumbnail(ui, &item.thumbnails, vec2(160.0, 160.0));
+                            ui.add_space(8.0);
+                            ui.label(RichText::new(&item.title).strong());
+                            self.show_home_item_subtitle(ui, item);
+                        });
+                    })
+            })
+            .inner;
+
+        frame.response.interact(Sense::click())
+    }
+
+    fn show_home_item_subtitle(&mut self, ui: &mut Ui, item: &HomeItem) {
+        let (Some(artist_name), Some(artist_id)) = (&item.artist_name, &item.artist_id) else {
+            ui.small(&item.subtitle);
+            return;
+        };
+        let prefix = item
+            .subtitle
+            .strip_suffix(artist_name)
+            .unwrap_or_default()
+            .trim_end();
+
+        ui.horizontal_wrapped(|ui| {
+            if !prefix.is_empty() {
+                ui.small(prefix);
+            }
+            if ui.link(artist_name).clicked() {
+                self.select_artist(artist_id.clone());
+            }
+        });
     }
 
     fn show_overview(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
@@ -546,7 +626,7 @@ impl Application {
             });
     }
 
-    fn show_artists(&self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
+    fn show_artists(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
         ui.heading("Artists");
         ui.add_space(6.0);
 
@@ -558,12 +638,117 @@ impl Application {
                 }
                 for artist in &snapshot.artists {
                     ui.push_id(("artist-row", &artist.artist, &artist.byline), |ui| {
-                        ui.label(&artist.artist);
+                        if ui.button(&artist.artist).clicked() {
+                            self.select_artist(artist.channel_id.get_raw().to_owned());
+                        }
                         ui.small(&artist.byline);
                         ui.add_space(6.0);
                     });
                 }
             });
+    }
+
+    fn show_artist_profile(&mut self, ui: &mut Ui) {
+        self.ensure_artist_requested();
+        if ui.button("← Back to artists").clicked() {
+            self.library.selected_tab = LibraryTab::Artists;
+            return;
+        }
+        ui.add_space(8.0);
+
+        match clone_async_state(self.library.artist_state.state()) {
+            AsyncView::Idle | AsyncView::Pending => {
+                ui.spinner();
+                ui.label("Loading artist profile...");
+            }
+            AsyncView::Failed(error) => {
+                ui.colored_label(
+                    Color32::RED,
+                    format!("Failed to load artist profile: {error}"),
+                );
+                if ui.button("Retry artist profile").clicked() {
+                    self.library.artist_state.clear();
+                }
+            }
+            AsyncView::Finished(artist) => {
+                Frame::group(ui.style())
+                    .fill(Color32::from_rgb(35, 29, 22))
+                    .corner_radius(16.0)
+                    .inner_margin(20.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            self.show_thumbnail(ui, &artist.thumbnails, vec2(160.0, 160.0));
+                            ui.add_space(18.0);
+                            ui.vertical(|ui| {
+                                ui.heading(RichText::new(&artist.name).size(34.0));
+                                ui.label(
+                                    artist
+                                        .subscribers
+                                        .as_deref()
+                                        .or(artist.views.as_deref())
+                                        .unwrap_or("Artist"),
+                                );
+                                ui.add_space(12.0);
+                                ui.horizontal(|ui| {
+                                    let _ = ui.add_enabled(false, egui::Button::new("Shuffle"));
+                                    let _ = ui.add_enabled(false, egui::Button::new("Radio"));
+                                    ui.label(if artist.subscribed {
+                                        "Subscribed"
+                                    } else {
+                                        "Not subscribed"
+                                    });
+                                });
+                            });
+                        });
+                    });
+                ui.add_space(18.0);
+
+                if let Some(songs) = &artist.top_releases.songs {
+                    ui.heading("Top tracks");
+                    for song in songs.results.iter().take(10) {
+                        ui.horizontal(|ui| {
+                            ui.hyperlink_to(
+                                RichText::new(&song.title).strong(),
+                                format!(
+                                    "https://music.youtube.com/watch?v={}",
+                                    song.video_id.get_raw()
+                                ),
+                            );
+                            ui.separator();
+                            ui.hyperlink_to(
+                                &song.album.name,
+                                format!(
+                                    "https://music.youtube.com/browse/{}",
+                                    song.album.id.get_raw()
+                                ),
+                            );
+                            ui.separator();
+                            for (index, contributor) in song.artists.iter().enumerate() {
+                                if index > 0 {
+                                    ui.label(",");
+                                }
+                                if let Some(id) = &contributor.id {
+                                    ui.hyperlink_to(
+                                        &contributor.name,
+                                        format!(
+                                            "https://music.youtube.com/channel/{}",
+                                            id.get_raw()
+                                        ),
+                                    );
+                                } else {
+                                    ui.small(&contributor.name);
+                                }
+                            }
+                            ui.separator();
+                            ui.small(&song.plays);
+                        });
+                        ui.separator();
+                    }
+                } else {
+                    ui.label("No top tracks available for this artist.");
+                }
+            }
+        }
     }
 
     fn show_auth_setup_form(&mut self, ctx: &Context) {

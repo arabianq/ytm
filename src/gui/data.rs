@@ -6,7 +6,7 @@ use egui_async::StateWithData;
 use std::sync::OnceLock;
 use ytmapi_rs::{
     YtMusic,
-    common::{PlaylistID, Thumbnail, YoutubeID},
+    common::{ArtistChannelID, PlaylistID, Thumbnail, YoutubeID},
     parse::PlaylistItem,
 };
 
@@ -156,6 +156,15 @@ pub(super) async fn load_playlist_snapshot(
         .context("failed to load playlist tracks")?;
 
     Ok(PlaylistSnapshot { details, tracks })
+}
+
+pub(super) async fn load_artist_profile(
+    yt: YtMusic<AppAuthToken>,
+    artist_id: String,
+) -> Result<ytmapi_rs::parse::GetArtist> {
+    yt.get_artist(ArtistChannelID::from_raw(artist_id))
+        .await
+        .context("failed to load artist profile")
 }
 
 pub(super) fn playlist_item_summary(item: &PlaylistItem) -> (String, String) {

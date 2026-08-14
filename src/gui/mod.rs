@@ -13,8 +13,8 @@ use std::{borrow::Cow, collections::HashMap};
 use ytmapi_rs::{
     YtMusic,
     parse::{
-        GetPlaylistDetails, LibraryArtist, LibraryPlaylist, MoodPlaylistCategory, ParseFrom,
-        PlaylistItem, ProcessedResult, SearchResultAlbum, TableListSong,
+        GetArtist, GetPlaylistDetails, LibraryArtist, LibraryPlaylist, MoodPlaylistCategory,
+        ParseFrom, PlaylistItem, ProcessedResult, SearchResultAlbum, TableListSong,
     },
     query::{PostMethod, PostQuery, Query},
 };
@@ -45,6 +45,7 @@ enum LibraryTab {
     Songs,
     Albums,
     Artists,
+    ArtistProfile,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -67,6 +68,8 @@ struct HomeItem {
     subtitle: String,
     browse_id: Option<String>,
     page_type: Option<String>,
+    artist_name: Option<String>,
+    artist_id: Option<String>,
     thumbnails: Vec<Thumbnail>,
 }
 
@@ -103,9 +106,11 @@ struct PlaylistSnapshot {
 struct ApplicationLibrary {
     current_state: Bind<LibrarySnapshot, anyhow::Error>,
     playlist_state: Bind<PlaylistSnapshot, anyhow::Error>,
+    artist_state: Bind<GetArtist, anyhow::Error>,
     selected_tab: LibraryTab,
     selected_playlist_id: Option<String>,
     selected_home_params: Option<String>,
+    selected_artist_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
