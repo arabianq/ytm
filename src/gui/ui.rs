@@ -18,6 +18,19 @@ use rust_i18n::t;
 use std::{collections::HashMap, env};
 use ytmapi_rs::common::YoutubeID;
 
+fn blend_color(from: Color32, to: Color32, progress: f32) -> Color32 {
+    let mix = |start: u8, end: u8| {
+        (f32::from(start) + (f32::from(end) - f32::from(start)) * progress.clamp(0.0, 1.0)).round()
+            as u8
+    };
+    Color32::from_rgba_premultiplied(
+        mix(from.r(), to.r()),
+        mix(from.g(), to.g()),
+        mix(from.b(), to.b()),
+        mix(from.a(), to.a()),
+    )
+}
+
 impl Application {
     pub(super) fn new(ctx: &Context) -> Self {
         ctx.set_zoom_factor(1.5);
@@ -102,11 +115,10 @@ impl Application {
     }
 
     fn select_artist(&mut self, artist_id: String) {
-        if self.library.selected_artist_id.as_deref() == Some(artist_id.as_str()) {
-            return;
+        if self.library.selected_artist_id.as_deref() != Some(artist_id.as_str()) {
+            self.library.selected_artist_id = Some(artist_id);
+            self.library.artist_state.clear();
         }
-        self.library.selected_artist_id = Some(artist_id);
-        self.library.artist_state.clear();
         self.library.selected_tab = LibraryTab::ArtistProfile;
     }
 
@@ -295,9 +307,20 @@ impl Application {
             return;
         }
 
-        for section in &home.sections {
-            ui.group(|ui| {
-                ui.heading(&section.title);
+        for (section_index, section) in home.sections.iter().enumerate() {
+            let featured = section_index == 0;
+            let frame = if featured {
+                Frame::default()
+            } else {
+                Frame::group(ui.style())
+            };
+            frame.show(ui, |ui| {
+                if featured {
+                    ui.label(RichText::new("FOR YOU").small().weak());
+                    ui.heading(RichText::new(&section.title).size(28.0));
+                } else {
+                    ui.heading(&section.title);
+                }
                 ui.add_space(6.0);
 
                 ScrollArea::horizontal()
@@ -341,18 +364,25 @@ impl Application {
             "home-item",
             item.browse_id.as_deref().unwrap_or(item.title.as_str()),
         ));
-        let fill = if selected {
-            Color32::from_rgb(28, 48, 72)
-        } else {
-            Color32::from_gray(24)
-        };
-        let stroke = if selected {
-            Stroke::new(1.0_f32, Color32::from_rgb(104, 178, 255))
-        } else {
-            Stroke::new(1.0_f32, Color32::from_gray(56))
-        };
+        let selection_progress = ui
+            .ctx()
+            .animate_bool(card_id.with("selected-animation"), selected);
+        let fill = blend_color(
+            Color32::from_gray(24),
+            Color32::from_rgb(28, 48, 72),
+            selection_progress,
+        );
+        let stroke = Stroke::new(
+            1.0_f32,
+            blend_color(
+                Color32::from_gray(56),
+                Color32::from_rgb(104, 178, 255),
+                selection_progress,
+            ),
+        );
 
         let mut playlist_clicked = false;
+        let mut artwork_rect = egui::Rect::NOTHING;
         ui.push_id(card_id.with("scope"), |ui| {
             Frame::group(ui.style())
                 .fill(fill)
@@ -362,18 +392,61 @@ impl Application {
                 .show(ui, |ui| {
                     ui.set_width(176.0);
                     ui.vertical(|ui| {
+                        artwork_rect =
+                            egui::Rect::from_min_size(ui.cursor().min, vec2(160.0, 160.0));
                         self.show_thumbnail(ui, &item.thumbnails, vec2(160.0, 160.0));
                         ui.add_space(8.0);
-                        let title_response = ui.add_enabled(
-                            clickable,
-                            egui::Label::new(RichText::new(&item.title).strong())
-                                .sense(egui::Sense::click()),
-                        );
-                        playlist_clicked = title_response.clicked();
+                        if clickable {
+                            playlist_clicked = ui
+                                .add(
+                                    egui::Label::new(RichText::new(&item.title).strong())
+                                        .sense(egui::Sense::click()),
+                                )
+                                .clicked();
+                        } else {
+                            ui.label(RichText::new(&item.title).strong());
+                        }
                         self.show_home_item_subtitle(ui, item);
                     });
                 })
         });
+
+        let play_response = ui.interact(
+            artwork_rect,
+            card_id.with("play-overlay"),
+            egui::Sense::click(),
+        );
+        let hover_progress = ui.ctx().animate_bool_with_time(
+            card_id.with("play-overlay-hover"),
+            play_response.hovered(),
+            0.22,
+        );
+        if clickable {
+            playlist_clicked |= play_response.clicked();
+        }
+        let center = artwork_rect.center();
+        let radius = 16.0 + hover_progress * 9.0;
+        ui.painter().circle_filled(
+            center,
+            radius,
+            Color32::from_black_alpha((hover_progress * 204.0) as u8),
+        );
+        let triangle_size = 0.7 + hover_progress * 0.35;
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(
+                    center.x - 6.0 * triangle_size,
+                    center.y - 10.0 * triangle_size,
+                ),
+                egui::pos2(
+                    center.x - 6.0 * triangle_size,
+                    center.y + 10.0 * triangle_size,
+                ),
+                egui::pos2(center.x + 11.0 * triangle_size, center.y),
+            ],
+            Color32::from_white_alpha((hover_progress * 255.0) as u8),
+            Stroke::NONE,
+        ));
 
         playlist_clicked
     }
@@ -427,11 +500,21 @@ impl Application {
                 }
             }
             AsyncView::Finished(user) => {
+                let profile_appearance = ui.ctx().animate_bool_with_time(
+                    Id::new("user-profile-appearance")
+                        .with(self.library.selected_user_id.as_deref().unwrap_or_default()),
+                    true,
+                    0.55,
+                );
                 ui.horizontal(|ui| {
                     self.show_thumbnail(ui, &user.thumbnails, vec2(144.0, 144.0));
                     ui.vertical(|ui| {
-                        ui.heading(RichText::new(&user.name).size(32.0));
-                        ui.label("YouTube Music profile");
+                        ui.heading(RichText::new(&user.name).size(32.0).color(
+                            Color32::from_white_alpha((profile_appearance * 255.0) as u8),
+                        ));
+                        ui.label(RichText::new("YouTube Music profile").color(
+                            Color32::from_white_alpha((profile_appearance * 180.0) as u8),
+                        ));
                     });
                 });
                 ui.add_space(16.0);
@@ -775,6 +858,16 @@ impl Application {
                 }
             }
             AsyncView::Finished(artist) => {
+                let profile_appearance = ui.ctx().animate_bool_with_time(
+                    Id::new("artist-profile-appearance").with(
+                        self.library
+                            .selected_artist_id
+                            .as_deref()
+                            .unwrap_or_default(),
+                    ),
+                    true,
+                    0.55,
+                );
                 Frame::group(ui.style())
                     .fill(Color32::from_rgb(35, 29, 22))
                     .corner_radius(16.0)
@@ -784,7 +877,9 @@ impl Application {
                             self.show_thumbnail(ui, &artist.thumbnails, vec2(160.0, 160.0));
                             ui.add_space(18.0);
                             ui.vertical(|ui| {
-                                ui.heading(RichText::new(&artist.name).size(34.0));
+                                ui.heading(RichText::new(&artist.name).size(34.0).color(
+                                    Color32::from_white_alpha((profile_appearance * 255.0) as u8),
+                                ));
                                 ui.label(
                                     artist
                                         .subscribers
