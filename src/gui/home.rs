@@ -98,6 +98,7 @@ fn parse_home_item(item: &Value) -> Option<HomeItem> {
         "/navigationEndpoint/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType",
     );
     let (artist_name, artist_id) = home_item_artist(item);
+    let (user_name, user_id) = home_item_link(item, "MUSIC_PAGE_TYPE_USER_CHANNEL");
     let thumbnails = thumbnails_at(
         item,
         "/thumbnailRenderer/musicThumbnailRenderer/thumbnail/thumbnails",
@@ -110,8 +111,21 @@ fn parse_home_item(item: &Value) -> Option<HomeItem> {
         page_type,
         artist_name,
         artist_id,
+        user_name,
+        user_id,
         thumbnails,
     })
+}
+
+fn home_item_link(item: &Value, expected_page_type: &str) -> (Option<String>, Option<String>) {
+    let Some(runs) = item.pointer("/subtitle/runs").and_then(Value::as_array) else {
+        return (None, None);
+    };
+    runs.iter().find_map(|run| {
+        let page_type = string_at(run, "/navigationEndpoint/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType");
+        if page_type.as_deref() != Some(expected_page_type) { return None; }
+        Some((run.get("text")?.as_str()?.trim().to_owned(), string_at(run, "/navigationEndpoint/browseEndpoint/browseId")?))
+    }).map_or((None, None), |(name, id)| (Some(name), Some(id)))
 }
 
 fn home_item_artist(item: &Value) -> (Option<String>, Option<String>) {

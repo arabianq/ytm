@@ -1,5 +1,6 @@
 use super::{
-    AppAuthToken, AsyncView, GetHomeQuery, HomeSnapshot, LibrarySnapshot, PlaylistSnapshot,
+    AppAuthToken, AsyncView, GetHomeQuery, GetUserProfileQuery, HomeSnapshot, LibrarySnapshot,
+    PlaylistSnapshot, UserProfile,
 };
 use anyhow::{Context as _, Result, anyhow};
 use egui_async::StateWithData;
@@ -165,6 +166,15 @@ pub(super) async fn load_artist_profile(
     yt.get_artist(ArtistChannelID::from_raw(artist_id))
         .await
         .context("failed to load artist profile")
+}
+
+pub(super) async fn load_user_profile(
+    yt: YtMusic<AppAuthToken>,
+    user_id: String,
+) -> Result<UserProfile> {
+    yt.query(GetUserProfileQuery::new(user_id))
+        .await
+        .context("failed to load user profile")
 }
 
 pub(super) fn playlist_item_summary(item: &PlaylistItem) -> (String, String) {

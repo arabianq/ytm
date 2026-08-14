@@ -3,15 +3,15 @@ use super::{
     LibraryTab, PlaylistSnapshot,
     data::{
         clone_async_state, load_artist_profile, load_library_snapshot, load_playlist_snapshot,
-        playlist_item_summary, playlist_item_thumbnails,
+        load_user_profile, playlist_item_summary, playlist_item_thumbnails,
     },
     fonts,
 };
 use anyhow::{Result, anyhow};
 use eframe::{App, HardwareAcceleration, NativeOptions};
 use egui::{
-    Align2, Area, Button, CentralPanel, Color32, Context, Frame, Id, RichText, ScrollArea, Sense,
-    Stroke, TextEdit, Ui, Vec2, ViewportBuilder, vec2,
+    Align2, Area, Button, CentralPanel, Color32, Context, Frame, Id, RichText, ScrollArea, Stroke,
+    TextEdit, Ui, Vec2, ViewportBuilder, vec2,
 };
 use egui_async::{Bind, StateWithData};
 use rust_i18n::t;
@@ -53,10 +53,12 @@ impl Application {
                 current_state: Bind::new(true),
                 playlist_state: Bind::new(true),
                 artist_state: Bind::new(true),
+                user_state: Bind::new(true),
                 selected_tab: LibraryTab::Home,
                 selected_playlist_id: None,
                 selected_home_params: None,
                 selected_artist_id: None,
+                selected_user_id: None,
             },
             thumbnail_state: HashMap::new(),
         }
@@ -122,10 +124,30 @@ impl Application {
         }
     }
 
+    fn select_user(&mut self, user_id: String) {
+        self.library.selected_user_id = Some(user_id);
+        self.library.user_state.clear();
+        self.library.selected_tab = LibraryTab::UserProfile;
+    }
+    fn ensure_user_requested(&mut self) {
+        let (Some(yt), Some(user_id)) = (
+            self.auth.yt_client.clone(),
+            self.library.selected_user_id.clone(),
+        ) else {
+            return;
+        };
+        if matches!(self.library.user_state.state(), StateWithData::Idle) {
+            self.library
+                .user_state
+                .request(load_user_profile(yt, user_id));
+        }
+    }
+
     fn reload_library(&mut self) {
         self.library.current_state.clear();
         self.library.playlist_state.clear();
         self.library.artist_state.clear();
+        self.library.user_state.clear();
     }
 
     fn set_home_filter(&mut self, params: Option<String>) {
@@ -212,6 +234,7 @@ impl Application {
                     .show(ui, |ui| self.show_artists(ui, snapshot));
             }
             LibraryTab::ArtistProfile => self.show_artist_profile(ui),
+            LibraryTab::UserProfile => self.show_user_profile(ui),
         }
     }
 
@@ -273,10 +296,11 @@ impl Application {
                                 let is_selected = is_playlist
                                     && self.library.selected_playlist_id.as_deref()
                                         == item.browse_id.as_deref();
-                                let response = self.show_home_media_card(ui, item, is_selected);
+                                let playlist_clicked =
+                                    self.show_home_media_card(ui, item, is_selected, is_playlist);
 
                                 if is_playlist
-                                    && response.clicked()
+                                    && playlist_clicked
                                     && let Some(browse_id) = &item.browse_id
                                 {
                                     self.select_playlist(browse_id.clone());
@@ -297,7 +321,8 @@ impl Application {
         ui: &mut Ui,
         item: &HomeItem,
         selected: bool,
-    ) -> egui::Response {
+        clickable: bool,
+    ) -> bool {
         let card_id = ui.make_persistent_id((
             "home-item",
             item.browse_id.as_deref().unwrap_or(item.title.as_str()),
@@ -313,29 +338,39 @@ impl Application {
             Stroke::new(1.0_f32, Color32::from_gray(56))
         };
 
-        let frame = ui
-            .push_id(card_id.with("scope"), |ui| {
-                Frame::group(ui.style())
-                    .fill(fill)
-                    .stroke(stroke)
-                    .corner_radius(12.0)
-                    .inner_margin(8.0)
-                    .show(ui, |ui| {
-                        ui.set_width(176.0);
-                        ui.vertical(|ui| {
-                            self.show_thumbnail(ui, &item.thumbnails, vec2(160.0, 160.0));
-                            ui.add_space(8.0);
-                            ui.label(RichText::new(&item.title).strong());
-                            self.show_home_item_subtitle(ui, item);
-                        });
-                    })
-            })
-            .inner;
+        let mut playlist_clicked = false;
+        ui.push_id(card_id.with("scope"), |ui| {
+            Frame::group(ui.style())
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(12.0)
+                .inner_margin(8.0)
+                .show(ui, |ui| {
+                    ui.set_width(176.0);
+                    ui.vertical(|ui| {
+                        self.show_thumbnail(ui, &item.thumbnails, vec2(160.0, 160.0));
+                        ui.add_space(8.0);
+                        let title_response = ui.add_enabled(
+                            clickable,
+                            egui::Label::new(RichText::new(&item.title).strong())
+                                .sense(egui::Sense::click()),
+                        );
+                        playlist_clicked = title_response.clicked();
+                        self.show_home_item_subtitle(ui, item);
+                    });
+                })
+        });
 
-        frame.response.interact(Sense::click())
+        playlist_clicked
     }
 
     fn show_home_item_subtitle(&mut self, ui: &mut Ui, item: &HomeItem) {
+        if let (Some(user_name), Some(user_id)) = (&item.user_name, &item.user_id) {
+            if ui.link(user_name).clicked() {
+                self.select_user(user_id.clone());
+            }
+            return;
+        }
         let (Some(artist_name), Some(artist_id)) = (&item.artist_name, &item.artist_id) else {
             ui.small(&item.subtitle);
             return;
@@ -354,6 +389,61 @@ impl Application {
                 self.select_artist(artist_id.clone());
             }
         });
+    }
+
+    fn show_user_profile(&mut self, ui: &mut Ui) {
+        self.ensure_user_requested();
+        if ui.button("← Back").clicked() {
+            self.library.selected_tab = LibraryTab::Home;
+            return;
+        }
+        match clone_async_state(self.library.user_state.state()) {
+            AsyncView::Idle | AsyncView::Pending => {
+                ui.spinner();
+                ui.label("Loading user profile...");
+            }
+            AsyncView::Failed(error) => {
+                log::error!("Failed to load user profile: {error:#}");
+                ui.colored_label(
+                    Color32::RED,
+                    format!("Failed to load user profile: {error:#}"),
+                );
+                if ui.button("Retry user profile").clicked() {
+                    self.library.user_state.clear();
+                }
+            }
+            AsyncView::Finished(user) => {
+                ui.horizontal(|ui| {
+                    self.show_thumbnail(ui, &user.thumbnails, vec2(144.0, 144.0));
+                    ui.vertical(|ui| {
+                        ui.heading(RichText::new(&user.name).size(32.0));
+                        ui.label("YouTube Music profile");
+                    });
+                });
+                ui.add_space(16.0);
+                ui.heading("Playlists");
+                for playlist in user.playlists.iter().take(12) {
+                    ui.horizontal(|ui| {
+                        self.show_thumbnail(ui, &playlist.thumbnails, vec2(56.0, 56.0));
+                        ui.vertical(|ui| {
+                            ui.label(&playlist.title);
+                            ui.small(&playlist.subtitle);
+                        });
+                    });
+                }
+                ui.add_space(12.0);
+                ui.heading("Videos");
+                for video in user.videos.iter().take(12) {
+                    ui.horizontal(|ui| {
+                        self.show_thumbnail(ui, &video.thumbnails, vec2(84.0, 56.0));
+                        ui.vertical(|ui| {
+                            ui.label(&video.title);
+                            ui.small(&video.subtitle);
+                        });
+                    });
+                }
+            }
+        }
     }
 
     fn show_overview(&mut self, ui: &mut Ui, snapshot: &LibrarySnapshot) {
