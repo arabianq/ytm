@@ -233,8 +233,22 @@ impl Application {
                     .id_salt("artists-page-scroll")
                     .show(ui, |ui| self.show_artists(ui, snapshot));
             }
-            LibraryTab::ArtistProfile => self.show_artist_profile(ui),
-            LibraryTab::UserProfile => self.show_user_profile(ui),
+            LibraryTab::ArtistProfile => {
+                ScrollArea::vertical()
+                    .id_salt("artist-profile-scroll")
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        self.show_artist_profile(ui);
+                    });
+            }
+            LibraryTab::UserProfile => {
+                ScrollArea::vertical()
+                    .id_salt("user-profile-scroll")
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        self.show_user_profile(ui);
+                    });
+            }
         }
     }
 
