@@ -217,13 +217,31 @@ fn download_audio(video_id: &str) -> Result<Vec<u8>, String> {
     Ok(output.stdout)
 }
 
+/// Path to a Netscape-format cookie file exported from the browser.
+/// Raw cookies are never passed via argv or headers: they are visible in the
+/// process list.
+fn cookie_file_path() -> Result<Option<PathBuf>, String> {
+    let configured = match env::var_os("YTM_COOKIE_FILE") {
+        Some(path) if !path.is_empty() => path,
+        _ => return Ok(None),
+    };
+    let path = PathBuf::from(configured);
+    if !path.is_file() {
+        return Err(format!(
+            "YTM_COOKIE_FILE points to a missing file: {}",
+            path.display()
+        ));
+    }
+    Ok(Some(path))
+}
+
 fn run_yt_dlp(video_url: &str, provider: &ProviderConfig) -> Result<Output, String> {
     let js_runtime = format!("node:{}", provider.node.display());
     let provider_argument = format!(
         "youtubepot-bgutilscript:server_home={}",
         provider.server_home.display()
     );
-    let arguments = [
+    let mut arguments = vec![
         "--no-playlist".to_owned(),
         "--no-progress".to_owned(),
         "--js-runtimes".to_owned(),
@@ -236,9 +254,13 @@ fn run_yt_dlp(video_url: &str, provider: &ProviderConfig) -> Result<Output, Stri
         "bestaudio[acodec^=mp4a]/bestaudio".to_owned(),
         "--output".to_owned(),
         "-".to_owned(),
-        "--".to_owned(),
-        video_url.to_owned(),
     ];
+    if let Some(cookie_file) = cookie_file_path()? {
+        arguments.push("--cookies".to_owned());
+        arguments.push(cookie_file.display().to_string());
+    }
+    arguments.push("--".to_owned());
+    arguments.push(video_url.to_owned());
     let candidates = yt_dlp_candidates();
     let mut last_not_found = None;
 

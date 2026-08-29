@@ -37,6 +37,17 @@ npm run build
 
 Install the plugin into `%APPDATA%\yt-dlp\plugins\` (see the provider README). Verify with `yt-dlp --verbose` — it must list `PO Token Providers: bgutil:...`.
 
+# Login (cookies)
+
+Playback downloads audio anonymously and works for most tracks. If YouTube requires a login (bot check, age restriction, some licensed music), export your browser cookies to a **Netscape-format** file (for example with the "Get cookies.txt LOCALLY" extension while logged in on music.youtube.com or youtube.com) and point the app to it:
+
+```powershell
+$env:YTM_COOKIE_FILE = "C:\path\to\cookies.txt"
+cargo run
+```
+
+The file is passed to `yt-dlp --cookies`. Raw cookies are never passed via command line or headers, because they would be visible in the process list.
+
 # Testing
 
 ```powershell
