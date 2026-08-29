@@ -227,6 +227,15 @@ pub(super) fn playlist_item_thumbnails(item: &PlaylistItem) -> &[Thumbnail] {
     }
 }
 
+pub(super) fn playlist_item_video_id(item: &PlaylistItem) -> &str {
+    match item {
+        PlaylistItem::Song(song) => song.video_id.get_raw(),
+        PlaylistItem::Video(video) => video.video_id.get_raw(),
+        PlaylistItem::Episode(episode) => episode.episode_id.get_raw(),
+        PlaylistItem::UploadSong(song) => song.video_id.get_raw(),
+    }
+}
+
 pub(super) fn preferred_thumbnail_url(thumbnails: &[Thumbnail]) -> Option<&str> {
     thumbnails
         .iter()

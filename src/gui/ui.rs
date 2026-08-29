@@ -3,15 +3,16 @@ use super::{
     LibraryTab, PlaylistSnapshot,
     data::{
         clone_async_state, load_artist_profile, load_library_snapshot, load_playlist_snapshot,
-        load_user_profile, playlist_item_summary, playlist_item_thumbnails,
+        load_user_profile, playlist_item_summary, playlist_item_thumbnails, playlist_item_video_id,
     },
     fonts,
+    playback::PlaybackStatus,
 };
 use anyhow::{Result, anyhow};
 use eframe::{App, HardwareAcceleration, NativeOptions};
 use egui::{
     Align2, Area, Button, CentralPanel, Color32, Context, Frame, Id, RichText, ScrollArea, Stroke,
-    TextEdit, Ui, Vec2, ViewportBuilder, vec2,
+    TextEdit, TopBottomPanel, Ui, Vec2, ViewportBuilder, vec2,
 };
 use egui_async::{Bind, StateWithData};
 use rust_i18n::t;
@@ -73,6 +74,7 @@ impl Application {
                 selected_artist_id: None,
                 selected_user_id: None,
             },
+            playback: super::playback::PlaybackController::new(),
             thumbnail_state: HashMap::new(),
         }
     }
@@ -727,18 +729,26 @@ impl Application {
                 for (index, item) in playlist.tracks.iter().enumerate() {
                     let (title, subtitle) = playlist_item_summary(item);
                     ui.push_id(("playlist-track", index, &title), |ui| {
-                        ui.horizontal(|ui| {
-                            self.show_thumbnail(
-                                ui,
-                                playlist_item_thumbnails(item),
-                                vec2(52.0, 52.0),
-                            );
-                            ui.add_space(8.0);
-                            ui.vertical(|ui| {
-                                ui.label(&title);
-                                ui.small(&subtitle);
-                            });
-                        });
+                        let response = ui
+                            .horizontal(|ui| {
+                                self.show_thumbnail(
+                                    ui,
+                                    playlist_item_thumbnails(item),
+                                    vec2(52.0, 52.0),
+                                );
+                                ui.add_space(8.0);
+                                ui.vertical(|ui| {
+                                    ui.label(&title);
+                                    ui.small(&subtitle);
+                                });
+                            })
+                            .response
+                            .interact(egui::Sense::click())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if response.clicked() {
+                            self.playback
+                                .play(playlist_item_video_id(item), title.clone());
+                        }
                         ui.add_space(6.0);
                     });
                 }
@@ -767,17 +777,25 @@ impl Application {
                     };
 
                     ui.push_id(("song-row", &song.title, &song.video_id), |ui| {
-                        ui.horizontal(|ui| {
-                            self.show_thumbnail(ui, &song.thumbnails, vec2(56.0, 56.0));
-                            ui.add_space(8.0);
-                            ui.vertical(|ui| {
-                                ui.label(&song.title);
-                                ui.small(format!(
-                                    "{} | {} | {}",
-                                    artists, song.album.name, song.duration
-                                ));
-                            });
-                        });
+                        let response = ui
+                            .horizontal(|ui| {
+                                self.show_thumbnail(ui, &song.thumbnails, vec2(56.0, 56.0));
+                                ui.add_space(8.0);
+                                ui.vertical(|ui| {
+                                    ui.label(&song.title);
+                                    ui.small(format!(
+                                        "{} | {} | {}",
+                                        artists, song.album.name, song.duration
+                                    ));
+                                });
+                            })
+                            .response
+                            .interact(egui::Sense::click())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if response.clicked() {
+                            self.playback
+                                .play(song.video_id.get_raw(), song.title.clone());
+                        }
                         ui.add_space(6.0);
                     });
                 }
@@ -906,13 +924,10 @@ impl Application {
                     ui.heading("Top tracks");
                     for song in songs.results.iter().take(10) {
                         ui.horizontal(|ui| {
-                            ui.hyperlink_to(
-                                RichText::new(&song.title).strong(),
-                                format!(
-                                    "https://music.youtube.com/watch?v={}",
-                                    song.video_id.get_raw()
-                                ),
-                            );
+                            if ui.link(RichText::new(&song.title).strong()).clicked() {
+                                self.playback
+                                    .play(song.video_id.get_raw(), song.title.clone());
+                            }
                             ui.separator();
                             ui.hyperlink_to(
                                 &song.album.name,
@@ -1014,11 +1029,78 @@ impl Application {
                     });
             });
     }
+
+    fn show_playback_controls(&mut self, ctx: &Context) {
+        let snapshot = self.playback.snapshot();
+        let active = !matches!(snapshot.status, PlaybackStatus::Idle);
+        let can_toggle = matches!(
+            snapshot.status,
+            PlaybackStatus::Playing | PlaybackStatus::Paused
+        );
+
+        TopBottomPanel::bottom("playback-controls")
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let toggle_label = if matches!(snapshot.status, PlaybackStatus::Paused) {
+                        "Play"
+                    } else {
+                        "Pause"
+                    };
+                    if ui
+                        .add_enabled(can_toggle, Button::new(toggle_label))
+                        .clicked()
+                    {
+                        self.playback.toggle_pause();
+                    }
+                    if ui.add_enabled(active, Button::new("Stop")).clicked() {
+                        self.playback.stop();
+                    }
+
+                    ui.separator();
+                    ui.label(
+                        snapshot
+                            .current_track
+                            .as_deref()
+                            .unwrap_or("Nothing playing"),
+                    );
+                    ui.separator();
+                    match &snapshot.status {
+                        PlaybackStatus::Idle => {
+                            ui.weak("Idle");
+                        }
+                        PlaybackStatus::Preparing => {
+                            ui.spinner();
+                            ui.label("Preparing...");
+                        }
+                        PlaybackStatus::Playing => {
+                            ui.label("Playing");
+                        }
+                        PlaybackStatus::Paused => {
+                            ui.label("Paused");
+                        }
+                        PlaybackStatus::Error(error) => {
+                            ui.colored_label(Color32::RED, format!("Playback error: {error}"));
+                        }
+                    }
+                });
+                ui.add_space(6.0);
+            });
+
+        if matches!(
+            snapshot.status,
+            PlaybackStatus::Preparing | PlaybackStatus::Playing
+        ) {
+            ctx.request_repaint_after_secs(0.1);
+        }
+    }
 }
 
 impl App for Application {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.plugin_or_default::<egui_async::EguiAsyncPlugin>();
+        self.show_playback_controls(ctx);
 
         CentralPanel::default().show(ctx, |ui| {
             if self.auth.yt_client.is_none() {

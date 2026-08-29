@@ -2,6 +2,7 @@ mod auth;
 mod data;
 mod fonts;
 mod home;
+mod playback;
 mod ui;
 mod widgets;
 
@@ -292,6 +293,7 @@ enum AsyncView<T> {
 pub struct Application {
     auth: ApplicationAuth,
     library: ApplicationLibrary,
+    playback: playback::PlaybackController,
     thumbnail_state: HashMap<String, Bind<Vec<u8>, anyhow::Error>>,
 }
 

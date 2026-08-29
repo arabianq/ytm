@@ -36,6 +36,10 @@ tokio = { version = "1.52.1", features = ["full"] }
 derivative = "2.2.0"
 reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls"] }
 image = { version = "0.25.9", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+rodio = { version = "0.22.2", default-features = false, features = [
+    "playback",
+    "symphonia-all",
+] }
 
 egui = { version = "0.33.3", default-features = false, features = [
     "default_fonts",
