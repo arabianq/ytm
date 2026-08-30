@@ -6,18 +6,27 @@ use super::{
         load_user_profile, playlist_item_summary, playlist_item_thumbnails, playlist_item_video_id,
     },
     fonts,
-    playback::PlaybackStatus,
+    playback::{PlaybackSnapshot, PlaybackStatus, QueuedTrack},
 };
 use anyhow::{Result, anyhow};
 use eframe::{App, HardwareAcceleration, NativeOptions};
 use egui::{
-    Align2, Area, Button, CentralPanel, Color32, Context, Frame, Id, RichText, ScrollArea, Stroke,
-    TextEdit, TopBottomPanel, Ui, Vec2, ViewportBuilder, vec2,
+    Align2, Area, Button, CentralPanel, Color32, Context, Frame, Id, Image, RichText, ScrollArea,
+    Sense, Slider, Stroke, TextEdit, TopBottomPanel, Ui, Vec2, ViewportBuilder, vec2,
 };
 use egui_async::{Bind, StateWithData};
 use rust_i18n::t;
-use std::{collections::HashMap, env};
+use std::{collections::HashMap, env, time::Duration};
 use ytmapi_rs::common::YoutubeID;
+
+const YT_RED: Color32 = Color32::from_rgb(255, 0, 0);
+
+fn apply_yt_slider_colors(ui: &mut Ui) {
+    let visuals = ui.visuals_mut();
+    visuals.selection.bg_fill = YT_RED;
+    visuals.widgets.active.bg_fill = YT_RED;
+    visuals.widgets.hovered.bg_fill = YT_RED;
+}
 
 fn blend_color(from: Color32, to: Color32, progress: f32) -> Color32 {
     let mix = |start: u8, end: u8| {
@@ -76,6 +85,11 @@ impl Application {
             },
             playback: super::playback::PlaybackController::new(),
             thumbnail_state: HashMap::new(),
+            seek_preview: None,
+            volume_preview: None,
+            big_player: false,
+            expanded_tab: super::ExpandedPlayerTab::Queue,
+            playlist_filter: String::new(),
         }
     }
 
@@ -332,18 +346,24 @@ impl Application {
                             for item in &section.items {
                                 let is_playlist =
                                     item.page_type.as_deref() == Some("MUSIC_PAGE_TYPE_PLAYLIST");
+                                let is_song = item.video_id.is_some();
                                 let is_selected = is_playlist
                                     && self.library.selected_playlist_id.as_deref()
                                         == item.browse_id.as_deref();
-                                let playlist_clicked =
-                                    self.show_home_media_card(ui, item, is_selected, is_playlist);
+                                let clicked = self.show_home_media_card(
+                                    ui,
+                                    item,
+                                    is_selected,
+                                    is_playlist || is_song,
+                                );
 
-                                if is_playlist
-                                    && playlist_clicked
-                                    && let Some(browse_id) = &item.browse_id
-                                {
-                                    self.select_playlist(browse_id.clone());
-                                    self.library.selected_tab = LibraryTab::Playlists;
+                                if clicked {
+                                    if let Some(video_id) = &item.video_id {
+                                        self.playback.play(video_id.clone(), item.title.clone());
+                                    } else if is_playlist && let Some(browse_id) = &item.browse_id {
+                                        self.select_playlist(browse_id.clone());
+                                        self.library.selected_tab = LibraryTab::Playlists;
+                                    }
                                 }
 
                                 ui.add_space(8.0);
@@ -720,7 +740,42 @@ impl Application {
 
         ui.add_space(8.0);
         ui.separator();
-        ui.label(format!("Items loaded: {}", playlist.tracks.len()));
+
+        let filter = self.playlist_filter.trim().to_lowercase();
+        if filter.is_empty() {
+            ui.add(
+                TextEdit::singleline(&mut self.playlist_filter)
+                    .hint_text("Search in playlist...")
+                    .desired_width(320.0),
+            );
+        } else {
+            ui.horizontal(|ui| {
+                if ui
+                    .add(
+                        TextEdit::singleline(&mut self.playlist_filter)
+                            .hint_text("Search in playlist...")
+                            .desired_width(280.0),
+                    )
+                    .lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
+                    self.playlist_filter.clear();
+                }
+                if ui.small_button("Clear").clicked() {
+                    self.playlist_filter.clear();
+                }
+                let matched = playlist
+                    .tracks
+                    .iter()
+                    .filter(|item| {
+                        let (title, subtitle) = playlist_item_summary(item);
+                        title.to_lowercase().contains(&filter)
+                            || subtitle.to_lowercase().contains(&filter)
+                    })
+                    .count();
+                ui.weak(format!("matched {matched} of {}", playlist.tracks.len()));
+            });
+        }
         ui.add_space(6.0);
 
         ScrollArea::vertical()
@@ -728,6 +783,12 @@ impl Application {
             .show(ui, |ui| {
                 for (index, item) in playlist.tracks.iter().enumerate() {
                     let (title, subtitle) = playlist_item_summary(item);
+                    if !filter.is_empty()
+                        && !title.to_lowercase().contains(&filter)
+                        && !subtitle.to_lowercase().contains(&filter)
+                    {
+                        continue;
+                    }
                     ui.push_id(("playlist-track", index, &title), |ui| {
                         let response = ui
                             .horizontal(|ui| {
@@ -746,8 +807,21 @@ impl Application {
                             .interact(egui::Sense::click())
                             .on_hover_cursor(egui::CursorIcon::PointingHand);
                         if response.clicked() {
-                            self.playback
-                                .play(playlist_item_video_id(item), title.clone());
+                            // Build the queue lazily: a playlist can hold
+                            // thousands of tracks, rebuilding it every frame
+                            // would be wasteful.
+                            let queue: Vec<QueuedTrack> = playlist
+                                .tracks
+                                .iter()
+                                .map(|t| {
+                                    let (title, _) = playlist_item_summary(t);
+                                    QueuedTrack {
+                                        video_id: playlist_item_video_id(t).to_string(),
+                                        title,
+                                    }
+                                })
+                                .collect();
+                            self.playback.play_queue(queue, index);
                         }
                         ui.add_space(6.0);
                     });
@@ -765,7 +839,16 @@ impl Application {
                 if snapshot.songs.is_empty() {
                     ui.label("No songs available.");
                 }
-                for song in snapshot.songs.iter().take(100) {
+                let queue: Vec<QueuedTrack> = snapshot
+                    .songs
+                    .iter()
+                    .take(100)
+                    .map(|song| QueuedTrack {
+                        video_id: song.video_id.get_raw().to_string(),
+                        title: song.title.clone(),
+                    })
+                    .collect();
+                for (index, song) in snapshot.songs.iter().take(100).enumerate() {
                     let artists = if song.artists.is_empty() {
                         "Unknown artist".to_string()
                     } else {
@@ -793,8 +876,7 @@ impl Application {
                             .interact(egui::Sense::click())
                             .on_hover_cursor(egui::CursorIcon::PointingHand);
                         if response.clicked() {
-                            self.playback
-                                .play(song.video_id.get_raw(), song.title.clone());
+                            self.playback.play_queue(queue.clone(), index);
                         }
                         ui.add_space(6.0);
                     });
@@ -922,11 +1004,19 @@ impl Application {
 
                 if let Some(songs) = &artist.top_releases.songs {
                     ui.heading("Top tracks");
-                    for song in songs.results.iter().take(10) {
+                    let queue: Vec<QueuedTrack> = songs
+                        .results
+                        .iter()
+                        .take(10)
+                        .map(|song| QueuedTrack {
+                            video_id: song.video_id.get_raw().to_string(),
+                            title: song.title.clone(),
+                        })
+                        .collect();
+                    for (index, song) in songs.results.iter().take(10).enumerate() {
                         ui.horizontal(|ui| {
                             if ui.link(RichText::new(&song.title).strong()).clicked() {
-                                self.playback
-                                    .play(song.video_id.get_raw(), song.title.clone());
+                                self.playback.play_queue(queue.clone(), index);
                             }
                             ui.separator();
                             ui.hyperlink_to(
@@ -1032,7 +1122,13 @@ impl Application {
 
     fn show_playback_controls(&mut self, ctx: &Context) {
         let snapshot = self.playback.snapshot();
-        let active = !matches!(snapshot.status, PlaybackStatus::Idle);
+        let active = matches!(
+            snapshot.status,
+            PlaybackStatus::Playing
+                | PlaybackStatus::Paused
+                | PlaybackStatus::Preparing
+                | PlaybackStatus::Error(_)
+        );
         let can_toggle = matches!(
             snapshot.status,
             PlaybackStatus::Playing | PlaybackStatus::Paused
@@ -1043,47 +1139,172 @@ impl Application {
             .show(ctx, |ui| {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    let toggle_label = if matches!(snapshot.status, PlaybackStatus::Paused) {
-                        "Play"
-                    } else {
-                        "Pause"
+                    let cover_clicked = match &snapshot.cover {
+                        Some(cover) => ui
+                            .add(
+                                Image::from_bytes(cover.uri.clone(), cover.bytes.to_vec())
+                                    .max_size(vec2(56.0, 56.0)),
+                            )
+                            .interact(Sense::click())
+                            .clicked(),
+                        None => {
+                            let (rect, _) =
+                                ui.allocate_exact_size(vec2(56.0, 56.0), Sense::hover());
+                            ui.painter().rect_stroke(
+                                rect,
+                                4.0,
+                                Stroke::new(1.0_f32, Color32::GRAY),
+                                egui::StrokeKind::Inside,
+                            );
+                            ui.interact(rect, Id::new("mini-cover"), Sense::click())
+                                .clicked()
+                        }
                     };
-                    if ui
-                        .add_enabled(can_toggle, Button::new(toggle_label))
-                        .clicked()
-                    {
-                        self.playback.toggle_pause();
-                    }
-                    if ui.add_enabled(active, Button::new("Stop")).clicked() {
-                        self.playback.stop();
+                    if cover_clicked {
+                        self.big_player ^= true;
                     }
 
-                    ui.separator();
-                    ui.label(
-                        snapshot
-                            .current_track
-                            .as_deref()
-                            .unwrap_or("Nothing playing"),
-                    );
-                    ui.separator();
-                    match &snapshot.status {
-                        PlaybackStatus::Idle => {
-                            ui.weak("Idle");
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            let toggle_icon = if matches!(snapshot.status, PlaybackStatus::Paused) {
+                                "\u{25B6}"
+                            } else {
+                                "\u{23F8}"
+                            };
+                            if ui
+                                .add_enabled(
+                                    can_toggle,
+                                    Button::new(RichText::new("\u{23EE}").size(16.0)),
+                                )
+                                .on_hover_text("Previous")
+                                .clicked()
+                            {
+                                self.playback.previous();
+                            }
+                            if ui
+                                .add_enabled(
+                                    can_toggle,
+                                    Button::new(RichText::new(toggle_icon).size(16.0)),
+                                )
+                                .on_hover_text(
+                                    if matches!(snapshot.status, PlaybackStatus::Paused) {
+                                        "Play"
+                                    } else {
+                                        "Pause"
+                                    },
+                                )
+                                .clicked()
+                            {
+                                self.playback.toggle_pause();
+                            }
+                            if ui
+                                .add_enabled(
+                                    can_toggle,
+                                    Button::new(RichText::new("\u{23ED}").size(16.0)),
+                                )
+                                .on_hover_text("Next")
+                                .clicked()
+                            {
+                                self.playback.next();
+                            }
+                            let shuffle_icon = if snapshot.shuffle {
+                                RichText::new("\u{1F500}").size(16.0).color(YT_RED)
+                            } else {
+                                RichText::new("\u{1F500}").size(16.0)
+                            };
+                            if ui
+                                .add(Button::new(shuffle_icon))
+                                .on_hover_text("Shuffle")
+                                .clicked()
+                            {
+                                self.playback.toggle_shuffle();
+                            }
+                            if ui
+                                .add_enabled(
+                                    active,
+                                    Button::new(RichText::new("\u{23F9}").size(16.0)),
+                                )
+                                .on_hover_text("Stop")
+                                .clicked()
+                            {
+                                self.playback.stop();
+                            }
+
+                            ui.separator();
+                            ui.label(
+                                snapshot
+                                    .current_track
+                                    .as_deref()
+                                    .unwrap_or("Nothing playing"),
+                            );
+                            ui.separator();
+                            match &snapshot.status {
+                                PlaybackStatus::Idle => {
+                                    ui.weak("Idle");
+                                }
+                                PlaybackStatus::Preparing => {
+                                    ui.spinner();
+                                    ui.label("Preparing...");
+                                }
+                                PlaybackStatus::Playing => {
+                                    ui.label("Playing");
+                                }
+                                PlaybackStatus::Paused => {
+                                    ui.label("Paused");
+                                }
+                                PlaybackStatus::Error(error) => {
+                                    ui.colored_label(
+                                        Color32::RED,
+                                        format!("Playback error: {error}"),
+                                    );
+                                }
+                            }
+                        });
+
+                        if can_toggle {
+                            ui.horizontal(|ui| {
+                                apply_yt_slider_colors(ui);
+                                ui.label(format_time(snapshot.position));
+                                if let Some(duration) = snapshot.duration {
+                                    let total = duration.as_secs_f32();
+                                    if total > 0.0 {
+                                        let mut value = self
+                                            .seek_preview
+                                            .unwrap_or(snapshot.position.as_secs_f32().min(total));
+                                        let slider_width =
+                                            (ui.available_width() - 230.0).max(120.0);
+                                        let response = ui.add_sized(
+                                            vec2(slider_width, 16.0),
+                                            Slider::new(&mut value, 0.0..=total).show_value(false),
+                                        );
+                                        if response.dragged() {
+                                            self.seek_preview = Some(value);
+                                        } else if let Some(preview) = self.seek_preview.take() {
+                                            self.playback.seek(Duration::from_secs_f32(preview));
+                                        }
+                                        ui.label(format_time(duration));
+                                    }
+                                }
+
+                                let mut volume = self.volume_preview.unwrap_or(snapshot.volume);
+                                let response = ui
+                                    .add_sized(
+                                        [120.0, 18.0],
+                                        Slider::new(&mut volume, 0.0..=1.0).show_value(false),
+                                    )
+                                    .on_hover_text("Volume");
+                                if response.dragged() {
+                                    self.volume_preview = Some(volume);
+                                } else {
+                                    self.volume_preview = None;
+                                }
+                                if response.changed() {
+                                    self.playback.set_volume(volume);
+                                }
+                                ui.label("Vol");
+                            });
                         }
-                        PlaybackStatus::Preparing => {
-                            ui.spinner();
-                            ui.label("Preparing...");
-                        }
-                        PlaybackStatus::Playing => {
-                            ui.label("Playing");
-                        }
-                        PlaybackStatus::Paused => {
-                            ui.label("Paused");
-                        }
-                        PlaybackStatus::Error(error) => {
-                            ui.colored_label(Color32::RED, format!("Playback error: {error}"));
-                        }
-                    }
+                    });
                 });
                 ui.add_space(6.0);
             });
@@ -1091,10 +1312,225 @@ impl Application {
         if matches!(
             snapshot.status,
             PlaybackStatus::Preparing | PlaybackStatus::Playing
-        ) {
+        ) || self.big_player
+        {
             ctx.request_repaint_after_secs(0.1);
         }
     }
+
+    fn show_expanded_player(&mut self, ui: &mut Ui, snapshot: &PlaybackSnapshot) {
+        ui.painter()
+            .rect_filled(ui.max_rect(), 0.0, Color32::from_gray(14));
+
+        ui.horizontal(|ui| {
+            // Left: large square artwork, track title and status.
+            ui.allocate_ui(
+                vec2(ui.available_width() * 0.66, ui.available_height()),
+                |ui| {
+                    ui.with_layout(
+                        egui::Layout::top_down_justified(egui::Align::Center),
+                        |ui| {
+                            ui.add_space(28.0);
+                            let cover_size = (ui.available_height() * 0.62).clamp(220.0, 520.0);
+                            let clicked = match &snapshot.cover {
+                                Some(cover) => ui
+                                    .add(
+                                        Image::from_bytes(cover.uri.clone(), cover.bytes.to_vec())
+                                            .fit_to_exact_size(vec2(cover_size, cover_size)),
+                                    )
+                                    .interact(Sense::click())
+                                    .clicked(),
+                                None => {
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        vec2(cover_size, cover_size),
+                                        Sense::click(),
+                                    );
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        4.0,
+                                        Stroke::new(1.0_f32, Color32::GRAY),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                    ui.interact(rect, Id::new("expanded-cover"), Sense::click())
+                                        .clicked()
+                                }
+                            };
+                            if clicked {
+                                self.big_player = false;
+                            }
+                            ui.add_space(20.0);
+                            ui.label(
+                                RichText::new(
+                                    snapshot.current_track.as_deref().unwrap_or("Unknown"),
+                                )
+                                .size(26.0)
+                                .strong(),
+                            );
+                            ui.add_space(4.0);
+                            match &snapshot.status {
+                                PlaybackStatus::Playing => {
+                                    ui.weak("Playing");
+                                }
+                                PlaybackStatus::Paused => {
+                                    ui.weak("Paused");
+                                }
+                                PlaybackStatus::Preparing => {
+                                    ui.spinner();
+                                    ui.weak("Preparing...");
+                                }
+                                PlaybackStatus::Error(error) => {
+                                    ui.colored_label(
+                                        Color32::RED,
+                                        format!("Playback error: {error}"),
+                                    );
+                                }
+                                PlaybackStatus::Idle => {
+                                    ui.weak("Idle");
+                                }
+                            };
+                        },
+                    );
+                },
+            );
+
+            // Right: queue panel with tabs.
+            ui.separator();
+            ui.allocate_ui(vec2(ui.available_width(), ui.available_height()), |ui| {
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.set_min_width(ui.available_width() - 24.0);
+
+                        ui.horizontal(|ui| {
+                            let tabs = [
+                                (super::ExpandedPlayerTab::Queue, "Up next"),
+                                (super::ExpandedPlayerTab::Lyrics, "Lyrics"),
+                                (super::ExpandedPlayerTab::Related, "Related"),
+                            ];
+                            for (tab, label) in tabs {
+                                let selected = self.expanded_tab == tab;
+                                let mut text = RichText::new(label);
+                                if selected {
+                                    text = text.color(YT_RED).strong();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        tab == super::ExpandedPlayerTab::Queue,
+                                        Button::new(text),
+                                    )
+                                    .on_hover_text(if tab == super::ExpandedPlayerTab::Queue {
+                                        ""
+                                    } else {
+                                        "Not available yet"
+                                    })
+                                    .clicked()
+                                {
+                                    self.expanded_tab = tab;
+                                }
+                                ui.add_space(4.0);
+                            }
+                        });
+                        ui.add_space(8.0);
+
+                        match self.expanded_tab {
+                            super::ExpandedPlayerTab::Lyrics
+                            | super::ExpandedPlayerTab::Related => {
+                                ui.weak("Not available yet");
+                            }
+                            super::ExpandedPlayerTab::Queue => {
+                                let queue = snapshot.queue.clone();
+                                if queue.is_empty() {
+                                    ui.weak("Queue is empty");
+                                } else {
+                                    egui::ScrollArea::vertical()
+                                        .max_height(ui.available_height() - 8.0)
+                                        .show(ui, |ui| {
+                                            for (i, track) in queue.iter().enumerate() {
+                                                let current = i == snapshot.queue_index;
+                                                let fill = if current {
+                                                    Color32::from_white_alpha(30)
+                                                } else if ui.response().hovered() {
+                                                    Color32::from_white_alpha(12)
+                                                } else {
+                                                    Color32::TRANSPARENT
+                                                };
+                                                let row = Frame::group(ui.style())
+                                                    .fill(fill)
+                                                    .inner_margin(egui::Margin::symmetric(8, 6))
+                                                    .show(ui, |ui| {
+                                                        ui.set_min_height(48.0);
+                                                        ui.horizontal(|ui| {
+                                                            // 48x48 artwork placeholder
+                                                            let (box_rect, _) = ui
+                                                                .allocate_exact_size(
+                                                                    vec2(48.0, 48.0),
+                                                                    Sense::hover(),
+                                                                );
+                                                            ui.painter().rect_filled(
+                                                                box_rect,
+                                                                4.0,
+                                                                Color32::from_gray(40),
+                                                            );
+                                                            if current {
+                                                                ui.painter().text(
+                                                                    box_rect.center(),
+                                                                    egui::Align2::CENTER_CENTER,
+                                                                    "\u{25B6}",
+                                                                    egui::FontId::proportional(
+                                                                        14.0,
+                                                                    ),
+                                                                    YT_RED,
+                                                                );
+                                                            } else {
+                                                                ui.painter().text(
+                                                                    box_rect.center(),
+                                                                    egui::Align2::CENTER_CENTER,
+                                                                    (i + 1).to_string(),
+                                                                    egui::FontId::proportional(
+                                                                        12.0,
+                                                                    ),
+                                                                    Color32::GRAY,
+                                                                );
+                                                            }
+                                                            ui.add_space(10.0);
+                                                            ui.vertical(|ui| {
+                                                                ui.add_space(6.0);
+                                                                ui.label(
+                                                                    RichText::new(&track.title)
+                                                                        .strong(),
+                                                                );
+                                                            });
+                                                        });
+                                                    })
+                                                    .response
+                                                    .interact(Sense::click())
+                                                    .on_hover_cursor(
+                                                        egui::CursorIcon::PointingHand,
+                                                    );
+                                                if row.clicked() {
+                                                    if current {
+                                                        self.big_player = false;
+                                                    } else {
+                                                        self.playback.jump_to(i);
+                                                    }
+                                                }
+                                                ui.add_space(2.0);
+                                            }
+                                        });
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+        });
+    }
+}
+
+fn format_time(duration: Duration) -> String {
+    let total = duration.as_secs();
+    format!("{}:{:02}", total / 60, total % 60)
 }
 
 impl App for Application {
@@ -1103,6 +1539,12 @@ impl App for Application {
         self.show_playback_controls(ctx);
 
         CentralPanel::default().show(ctx, |ui| {
+            let snapshot = self.playback.snapshot();
+            if self.big_player && snapshot.current_track.is_some() {
+                self.show_expanded_player(ui, &snapshot);
+                return;
+            }
+
             if self.auth.yt_client.is_none() {
                 if self.auth.has_any_auth_source() {
                     self.process_auth(ui);

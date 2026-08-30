@@ -4,11 +4,13 @@ use super::{
 };
 use anyhow::{Context as _, Result, anyhow};
 use egui_async::StateWithData;
+use futures::TryStreamExt;
 use std::sync::OnceLock;
 use ytmapi_rs::{
     YtMusic,
     common::{ArtistChannelID, PlaylistID, Thumbnail, YoutubeID},
     parse::PlaylistItem,
+    query::GetPlaylistTracksQuery,
 };
 
 pub(super) async fn load_library_snapshot(
@@ -151,10 +153,15 @@ pub(super) async fn load_playlist_snapshot(
         .get_playlist_details(playlist_id.clone())
         .await
         .context("failed to load playlist details")?;
-    let tracks = yt
-        .get_playlist_tracks(playlist_id)
+    // One-shot queries return only the first page (~100 items); stream the
+    // continuations to get the full playlist.
+    // The stream yields one page (Vec) per continuation; flatten them.
+    let pages: Vec<Vec<PlaylistItem>> = yt
+        .stream(&GetPlaylistTracksQuery::new(playlist_id))
+        .try_collect()
         .await
         .context("failed to load playlist tracks")?;
+    let tracks = pages.into_iter().flatten().collect::<Vec<_>>();
 
     Ok(PlaylistSnapshot { details, tracks })
 }

@@ -74,6 +74,7 @@ struct HomeItem {
     artist_id: Option<String>,
     user_name: Option<String>,
     user_id: Option<String>,
+    video_id: Option<String>,
     thumbnails: Vec<Thumbnail>,
 }
 
@@ -290,11 +291,23 @@ enum AsyncView<T> {
     Failed(String),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExpandedPlayerTab {
+    Queue,
+    Lyrics,
+    Related,
+}
+
 pub struct Application {
     auth: ApplicationAuth,
     library: ApplicationLibrary,
     playback: playback::PlaybackController,
     thumbnail_state: HashMap<String, Bind<Vec<u8>, anyhow::Error>>,
+    seek_preview: Option<f32>,
+    volume_preview: Option<f32>,
+    big_player: bool,
+    expanded_tab: ExpandedPlayerTab,
+    playlist_filter: String,
 }
 
 impl ApplicationAuth {

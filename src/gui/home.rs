@@ -104,6 +104,19 @@ fn parse_home_item(item: &Value) -> Option<HomeItem> {
         "/thumbnailRenderer/musicThumbnailRenderer/thumbnail/thumbnails",
     );
 
+    let video_id = string_at(item, "/navigationEndpoint/watchEndpoint/videoId").or_else(|| {
+        item.pointer("/menu/menuRenderer/items")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items.iter().find_map(|item| {
+                    string_at(
+                        item,
+                        "/menuNavigationItemRenderer/navigationEndpoint/watchEndpoint/videoId",
+                    )
+                })
+            })
+    });
+
     Some(HomeItem {
         title,
         subtitle,
@@ -113,6 +126,7 @@ fn parse_home_item(item: &Value) -> Option<HomeItem> {
         artist_id,
         user_name,
         user_id,
+        video_id,
         thumbnails,
     })
 }

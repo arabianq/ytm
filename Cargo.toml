@@ -34,7 +34,8 @@ dirs = "6.0.0"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 tokio = { version = "1.52.1", features = ["full"] }
 derivative = "2.2.0"
-reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls", "blocking"] }
+futures = { version = "0.3.31", default-features = false, features = ["std", "async-await"] }
 image = { version = "0.25.9", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 rodio = { version = "0.22.2", default-features = false, features = [
     "playback",
